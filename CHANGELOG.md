@@ -1,3 +1,11 @@
+### 1.0.3: 2025-07-08
+
+* Add skip_unknown_models valve to disable tracking for models without prices
+* Improve token counting accuracy using exact tiktoken encoding
+* Fix monthly/daily cost persistence with historical data storage
+* Add support for Open WebUI Models (characters) base model extraction
+* Improve manual edit handling to respect user modifications
+
 ### 1.0.2: 2025-07-08
 
 * Add usage history

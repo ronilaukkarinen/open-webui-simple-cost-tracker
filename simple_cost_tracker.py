@@ -3,7 +3,7 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.0.2
+version: 1.0.3
 required_open_webui_version: >= 0.5.0
 """
 
@@ -130,9 +130,13 @@ class SimpleCostTracker:
 
         return None
 
-    def track_usage(self, model: str, input_tokens: int, output_tokens: int) -> str:
+    def track_usage(self, model: str, input_tokens: int, output_tokens: int, skip_unknown: bool = True) -> Optional[str]:
         """Track usage and return formatted cost message"""
         message_cost, found_model = self.calculate_cost(model, input_tokens, output_tokens)
+
+        # If skip_unknown is enabled and model not found, return None (no tracking)
+        if skip_unknown and not found_model:
+            return None
 
         # Load current values from file to respect manual edits
         current_monthly, current_daily = self.load_costs()
@@ -172,6 +176,16 @@ class Filter:
     "google.gemini-2.5-pro": {"input": 1.25, "output": 10.00}
 }""",
             description="Model costs per 1M tokens (EUR) in JSON format. Add/remove models as needed. IMPORTANT: Use the exact model name as shown in Settings > Models. If you use connection prefixes (like 'openai.', 'anthropic.', 'google.'), include the full prefixed name as the key (e.g., 'openai.gpt-4o-mini' not just 'gpt-4o-mini')."
+        )
+
+        skip_unknown_models: bool = Field(
+            default=True,
+            description="Skip cost tracking for models not found in the costs JSON (typically local models with no cost). When enabled, unknown models won't show any cost tracking messages."
+        )
+
+        enable_debug: bool = Field(
+            default=False,
+            description="Show debug messages with token counts and chat IDs for troubleshooting."
         )
 
     def __init__(self):
@@ -253,6 +267,23 @@ class Filter:
             total_input_text += content + " "
 
         model = body.get("model", "unknown")
+        
+        # Quick check if we should skip this model using JSON valve
+        if self.valves.skip_unknown_models:
+            try:
+                model_costs = json.loads(self.valves.model_costs_json)
+                model_lower = model.lower()
+                found_in_costs = any(key.lower() == model_lower or 
+                                   key.lower() in model_lower or 
+                                   model_lower in key.lower() 
+                                   for key in model_costs.keys())
+                if not found_in_costs:
+                    # Unknown model and skip enabled - don't show processing message
+                    return body
+            except json.JSONDecodeError:
+                # If JSON is invalid, proceed with tracking
+                pass
+        
         input_tokens = self.count_tokens_exact(total_input_text)
 
         # Store for later use in outlet - use multiple keys for reliability
@@ -312,16 +343,10 @@ class Filter:
                         output_tokens = self.count_tokens_exact(msg.get("content", ""))
                         break
 
-            # Debug: Add logging to see what's happening
-            if __event_emitter__:
+            # Debug: Add logging to see what's happening (only in logs, not emitter)
+            if self.valves.enable_debug:
                 available_chats = list(self._requests.keys()) if hasattr(self, '_requests') else []
-                await __event_emitter__({
-                    "type": "status",
-                    "data": {
-                        "description": f"DEBUG: inlet_tokens={input_tokens}, output_tokens={output_tokens}, chat_id={chat_id}, available_chats={available_chats}",
-                        "done": False
-                    }
-                })
+                print(f"DEBUG: inlet_tokens={input_tokens}, output_tokens={output_tokens}, chat_id={chat_id}, available_chats={available_chats}")
 
             # If we still don't have tokens, fall back to API data
             if input_tokens == 0 and output_tokens == 0:
@@ -335,7 +360,12 @@ class Filter:
             else:
                 # Calculate cost and create message
                 tracker = self.get_tracker()
-                cost_message = tracker.track_usage(model, input_tokens, output_tokens)
+                cost_message = tracker.track_usage(model, input_tokens, output_tokens, self.valves.skip_unknown_models)
+                
+                # If cost_message is None (unknown model and skip_unknown enabled), don't show anything
+                if cost_message is None:
+                    return body
+                    
                 status_message = cost_message
 
             # Emit status using event emitter
