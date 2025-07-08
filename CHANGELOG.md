@@ -1,3 +1,9 @@
+### 1.0.2: 2025-07-08
+
+* Add usage history
+* Fix base model not being fetched for OpenAI Models (Characters)
+* Fix manual edits being overwritten by automatic tracking
+
 ### 1.0.1: 2025-07-08
 
 * Fix costs not being tracked correctly

@@ -3,7 +3,7 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.0.1
+version: 1.0.2
 required_open_webui_version: >= 0.5.0
 """
 
@@ -37,11 +37,12 @@ class SimpleCostTracker:
                 with open(self.storage_file, 'r') as f:
                     data = json.load(f)
 
-                    # Check if it's a new month
-                    monthly_cost = 0.0 if data.get('month') != self.current_month else data.get('monthly_cost', 0.0)
+                    # Get current month and day costs from history
+                    monthly_history = data.get('monthly_history', {})
+                    daily_history = data.get('daily_history', {})
 
-                    # Check if it's a new day
-                    daily_cost = 0.0 if data.get('date') != self.current_date else data.get('daily_cost', 0.0)
+                    monthly_cost = monthly_history.get(self.current_month, 0.0)
+                    daily_cost = daily_history.get(self.current_date, 0.0)
 
                     return monthly_cost, daily_cost
         except:
@@ -49,15 +50,32 @@ class SimpleCostTracker:
         return 0.0, 0.0
 
     def save_costs(self):
-        """Save monthly and daily costs to storage file"""
+        """Save monthly and daily costs to storage file with history"""
         try:
+            # Load existing data to preserve history
+            existing_data = {}
+            if os.path.exists(self.storage_file):
+                with open(self.storage_file, 'r') as f:
+                    existing_data = json.load(f)
+
+            # Get existing histories or create empty ones
+            monthly_history = existing_data.get('monthly_history', {})
+            daily_history = existing_data.get('daily_history', {})
+
+
+            # Update current month/day costs
+            monthly_history[self.current_month] = self.monthly_cost
+            daily_history[self.current_date] = self.daily_cost
+
+            # Prepare data structure with history
             data = {
-                'month': self.current_month,
-                'date': self.current_date,
-                'monthly_cost': self.monthly_cost,
-                'daily_cost': self.daily_cost,
+                'current_month': self.current_month,
+                'current_date': self.current_date,
+                'monthly_history': monthly_history,
+                'daily_history': daily_history,
                 'last_updated': datetime.now().isoformat()
             }
+
             with open(self.storage_file, 'w') as f:
                 json.dump(data, f, indent=2)
         except:
@@ -115,8 +133,14 @@ class SimpleCostTracker:
     def track_usage(self, model: str, input_tokens: int, output_tokens: int) -> str:
         """Track usage and return formatted cost message"""
         message_cost, found_model = self.calculate_cost(model, input_tokens, output_tokens)
-        self.monthly_cost += message_cost
-        self.daily_cost += message_cost
+
+        # Load current values from file to respect manual edits
+        current_monthly, current_daily = self.load_costs()
+
+        # Add message cost to current file values (not memory values)
+        self.monthly_cost = current_monthly + message_cost
+        self.daily_cost = current_daily + message_cost
+
         self.save_costs()
 
         total_tokens = input_tokens + output_tokens
@@ -125,7 +149,7 @@ class SimpleCostTracker:
         if found_model:
             return f"{message_cost:.4f} € for this message, {self.daily_cost:.4f} € today, {self.monthly_cost:.4f} € this month, {total_tokens} tokens used"
         else:
-            return f"{message_cost:.4f} € for this message (unknown model: {model}), {self.daily_cost:.4f} € today, {self.monthly_cost:.4f} € this month, {total_tokens} tokens used"
+            return f"{message_cost:.4f} € for this message, {self.daily_cost:.4f} € today, {self.monthly_cost:.4f} € this month, {total_tokens} tokens used"
 
 # Open WebUI Filter Implementation
 class Filter:
