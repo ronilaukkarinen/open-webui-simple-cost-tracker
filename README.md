@@ -39,9 +39,9 @@ The function includes pre-configured costs for popular models. Update the **Mode
 
 ```json
 {
-    "openai.gpt-4.1-mini": {"input": 0.40, "output": 1.6},
-    "anthropic.claude-3-5-haiku-latest": {"input": 0.80, "output": 4.0},
-    "google.gemini-2.5-flash": {"input": 0.30, "output": 2.50}
+  "openai.gpt-4.1-mini": {"input": 0.40, "output": 1.6},
+  "anthropic.claude-3-5-haiku-latest": {"input": 0.80, "output": 4.0},
+  "google.gemini-2.5-flash": {"input": 0.30, "output": 2.50}
 }
 ```
 
