@@ -3,7 +3,7 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.0.0
+version: 1.0.1
 required_open_webui_version: >= 0.5.0
 """
 
@@ -12,6 +12,7 @@ import os
 from datetime import datetime, date
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
+import tiktoken
 
 
 class SimpleCostTracker:
@@ -35,13 +36,13 @@ class SimpleCostTracker:
             if os.path.exists(self.storage_file):
                 with open(self.storage_file, 'r') as f:
                     data = json.load(f)
-                    
+
                     # Check if it's a new month
                     monthly_cost = 0.0 if data.get('month') != self.current_month else data.get('monthly_cost', 0.0)
-                    
+
                     # Check if it's a new day
                     daily_cost = 0.0 if data.get('date') != self.current_date else data.get('daily_cost', 0.0)
-                    
+
                     return monthly_cost, daily_cost
         except:
             pass
@@ -78,18 +79,35 @@ class SimpleCostTracker:
 
         return input_cost + output_cost, found_model
 
+    def get_base_model_id(self, model: str) -> str:
+        """Extract base model ID from Open WebUI Model if it's a character"""
+        try:
+            # Try to access Open WebUI Models database
+            from open_webui.models.models import Models
+
+            model_obj = Models.get_model_by_id(model)
+            if model_obj and model_obj.base_model_id:
+                return model_obj.base_model_id
+        except Exception:
+            # If we can't access the database, return the original model
+            pass
+
+        return model
+
     def find_model_key(self, model: str) -> Optional[str]:
         """Find matching model key (case-insensitive, partial match)"""
-        model_lower = model.lower()
+        # First try to get the base model if this is a character
+        base_model = self.get_base_model_id(model)
+        base_model_lower = base_model.lower()
 
         # Exact match first
         for key in self.model_costs:
-            if key.lower() == model_lower:
+            if key.lower() == base_model_lower:
                 return key
 
         # Partial match
         for key in self.model_costs:
-            if key.lower() in model_lower or model_lower in key.lower():
+            if key.lower() in base_model_lower or base_model_lower in key.lower():
                 return key
 
         return None
@@ -105,12 +123,9 @@ class SimpleCostTracker:
 
         # Show different message based on whether model was found
         if found_model:
-            return f"{self.monthly_cost:.4f} € this month, {self.daily_cost:.4f} € today, {message_cost:.4f} € for this message, {total_tokens} tokens used"
+            return f"{message_cost:.4f} € for this message, {self.daily_cost:.4f} € today, {self.monthly_cost:.4f} € this month, {total_tokens} tokens used"
         else:
-            return f"{self.monthly_cost:.4f} € this month, {self.daily_cost:.4f} € today, {message_cost:.4f} € for this message (unknown model: {model}), {total_tokens} tokens used"
-
-
-
+            return f"{message_cost:.4f} € for this message (unknown model: {model}), {self.daily_cost:.4f} € today, {self.monthly_cost:.4f} € this month, {total_tokens} tokens used"
 
 # Open WebUI Filter Implementation
 class Filter:
@@ -187,6 +202,16 @@ class Filter:
         except Exception as e:
             return f"\n\n📊 Usage summary error: {str(e)}"
 
+    def count_tokens_exact(self, text: str) -> int:
+        """Count tokens exactly using tiktoken"""
+        try:
+            # Use cl100k_base encoding for most models (GPT-4, GPT-3.5, etc.)
+            encoding = tiktoken.get_encoding("cl100k_base")
+            return len(encoding.encode(text))
+        except:
+            # Fallback to rough estimation if tiktoken fails
+            return len(text) // 4
+
     async def inlet(self, body: dict, __user__: Optional[dict] = None, __event_emitter__ = None) -> dict:
         """
         Capture the full request being sent to the LLM
@@ -194,33 +219,40 @@ class Filter:
         # Store the full input for cost calculation
         if not hasattr(self, '_requests'):
             self._requests = {}
-        
-        # Calculate input tokens from the complete request
+
+        # Calculate input tokens from the complete request (includes memories, system prompt, etc.)
         all_messages = body.get("messages", [])
         total_input_text = ""
-        
+
         for msg in all_messages:
             content = msg.get("content", "")
             total_input_text += content + " "
-        
-        input_tokens = len(total_input_text) // 4
-        
-        # Store for later use in outlet
+
+        model = body.get("model", "unknown")
+        input_tokens = self.count_tokens_exact(total_input_text)
+
+        # Store for later use in outlet - use multiple keys for reliability
         chat_id = body.get("chat_id", "unknown")
-        self._requests[chat_id] = {
-            "input_tokens": input_tokens,
-            "model": body.get("model", "unknown")
-        }
-        
+        session_id = body.get("session_id", "unknown")
+        message_id = body.get("id", "unknown")
+
+        # Store with multiple possible keys
+        for key in [chat_id, session_id, message_id, "last_request"]:
+            if key != "unknown":
+                self._requests[key] = {
+                    "input_tokens": input_tokens,
+                    "model": model
+                }
+
         if __event_emitter__:
             await __event_emitter__({
                 "type": "status",
                 "data": {
-                    "description": f"Processing {input_tokens} input tokens with {body.get('model', 'unknown')}...",
+                    "description": f"Processing {input_tokens} input tokens with {model}...",
                     "done": False
                 }
             })
-        
+
         return body
 
     async def outlet(self, body: dict, __user__: Optional[dict] = None, __event_emitter__ = None) -> dict:
@@ -231,28 +263,48 @@ class Filter:
             # Extract model information
             model = body.get("model", "unknown")
             chat_id = body.get("chat_id", "unknown")
-            
-            # Get token data from usage field first
-            usage = body.get("usage", {})
-            input_tokens = usage.get("prompt_tokens", 0)
-            output_tokens = usage.get("completion_tokens", 0)
-            
-            # If no API usage data, use our stored data from inlet + estimate output
+
+            # Always use our exact token counting as it includes all context (memories, system prompt, etc.)
+            input_tokens = 0
+            output_tokens = 0
+
+            # Get input tokens from inlet method - try multiple keys
+            session_id = body.get("session_id", "unknown")
+            message_id = body.get("id", "unknown")
+
+            if hasattr(self, '_requests'):
+                for key in [chat_id, session_id, message_id, "last_request"]:
+                    if key in self._requests:
+                        input_tokens = self._requests[key]["input_tokens"]
+                        # Clean up stored data
+                        del self._requests[key]
+                        break
+
+            # Count output tokens exactly from the last assistant message
+            messages = body.get("messages", [])
+            if messages:
+                for msg in reversed(messages):
+                    if msg.get("role") == "assistant":
+                        output_tokens = self.count_tokens_exact(msg.get("content", ""))
+                        break
+
+            # Debug: Add logging to see what's happening
+            if __event_emitter__:
+                available_chats = list(self._requests.keys()) if hasattr(self, '_requests') else []
+                await __event_emitter__({
+                    "type": "status",
+                    "data": {
+                        "description": f"DEBUG: inlet_tokens={input_tokens}, output_tokens={output_tokens}, chat_id={chat_id}, available_chats={available_chats}",
+                        "done": False
+                    }
+                })
+
+            # If we still don't have tokens, fall back to API data
             if input_tokens == 0 and output_tokens == 0:
-                # Get input tokens from inlet method
-                if hasattr(self, '_requests') and chat_id in self._requests:
-                    input_tokens = self._requests[chat_id]["input_tokens"]
-                    # Clean up stored data
-                    del self._requests[chat_id]
-                
-                # Estimate output tokens from the last assistant message
-                messages = body.get("messages", [])
-                if messages:
-                    for msg in reversed(messages):
-                        if msg.get("role") == "assistant":
-                            output_tokens = len(msg.get("content", "")) // 4
-                            break
-            
+                usage = body.get("usage", {})
+                input_tokens = usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("completion_tokens", 0)
+
             # Create status message
             if input_tokens == 0 and output_tokens == 0:
                 status_message = f"No token usage data available for model: {model}"
@@ -261,7 +313,7 @@ class Filter:
                 tracker = self.get_tracker()
                 cost_message = tracker.track_usage(model, input_tokens, output_tokens)
                 status_message = cost_message
-            
+
             # Emit status using event emitter
             if __event_emitter__:
                 await __event_emitter__({

@@ -1,3 +1,8 @@
+### 1.0.1: 2025-07-08
+
+* Fix costs not being tracked correctly
+* Use tiktoken for token estimation
+
 ### 1.0.0: 2025-07-08
 
 * Add monthly cost tracking with automatic reset
