@@ -3,16 +3,120 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.0.3
+version: 1.0.6
 required_open_webui_version: >= 0.5.0
 """
 
 import json
 import os
+import asyncio
+import aiohttp
 from datetime import datetime, date
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 import tiktoken
+
+class OpenAIAPIFetcher:
+    """Fetch OpenAI cost data directly from API"""
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.base_url = "https://api.openai.com/v1"
+
+    async def fetch_organization_costs(self, start_time: int, limit: int = 100) -> dict:
+        """Fetch organization costs from OpenAI API"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+
+                url = f"{self.base_url}/organization/costs"
+                params = {
+                    "start_time": start_time,
+                    "limit": limit
+                }
+
+                print(f"SIMPLE_COST_TRACKER DEBUG: API URL: {url}")
+                print(f"SIMPLE_COST_TRACKER DEBUG: API params: {params}")
+
+                async with session.get(url, headers=headers, params=params) as response:
+                    print(f"SIMPLE_COST_TRACKER DEBUG: API response status: {response.status}")
+                    if response.status == 200:
+                        result = await response.json()
+                        print(f"SIMPLE_COST_TRACKER DEBUG: API response JSON: {result}")
+                        return result
+                    else:
+                        error_text = await response.text()
+                        print(f"SIMPLE_COST_TRACKER DEBUG: API error text: {error_text}")
+                        return {"error": f"HTTP {response.status}: {error_text}"}
+        except Exception as e:
+            print(f"SIMPLE_COST_TRACKER DEBUG: API exception: {str(e)}")
+            return {"error": f"API request failed: {str(e)}"}
+
+    async def get_daily_costs(self) -> dict:
+        """Get today's costs from OpenAI API"""
+        # Get start of today in Unix timestamp
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        start_time = int(today.timestamp())
+
+        result = await self.fetch_organization_costs(start_time, 1)
+
+        if "error" in result:
+            return result
+
+        # Extract cost data from OpenAI API response structure
+        data = result.get("data", [])
+        if not data:
+            return {"cost": 0.0, "date": today.strftime("%Y-%m-%d")}
+
+        # Sum up costs for today from the nested structure
+        total_cost = 0.0
+        for bucket in data:
+            results = bucket.get("results", [])
+            for result_item in results:
+                amount = result_item.get("amount", {})
+                cost_value = amount.get("value", 0.0)
+                total_cost += cost_value
+
+        return {
+            "cost": total_cost,
+            "date": today.strftime("%Y-%m-%d"),
+            "currency": "USD"
+        }
+
+    async def get_monthly_costs(self) -> dict:
+        """Get monthly costs from OpenAI API"""
+        # Get start of current month in Unix timestamp
+        today = datetime.now()
+        month_start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        start_time = int(month_start.timestamp())
+
+        result = await self.fetch_organization_costs(start_time, 100)  # Get more records for the month
+
+        if "error" in result:
+            return result
+
+        # Extract cost data from OpenAI API response structure
+        data = result.get("data", [])
+        if not data:
+            return {"cost": 0.0, "month": today.strftime("%Y-%m")}
+
+        # Sum up costs for the month from the nested structure
+        total_cost = 0.0
+        for bucket in data:
+            results = bucket.get("results", [])
+            for result_item in results:
+                amount = result_item.get("amount", {})
+                cost_value = amount.get("value", 0.0)
+                total_cost += cost_value
+
+        return {
+            "cost": total_cost,
+            "month": today.strftime("%Y-%m"),
+            "currency": "USD"
+        }
 
 
 class SimpleCostTracker:
@@ -29,6 +133,7 @@ class SimpleCostTracker:
         self.current_month = datetime.now().strftime("%Y-%m")
         self.current_date = datetime.now().strftime("%Y-%m-%d")
         self.monthly_cost, self.daily_cost = self.load_costs()
+        self.monthly_provider_costs, self.daily_provider_costs = self.load_provider_costs()
 
     def load_costs(self) -> tuple[float, float]:
         """Load monthly and daily costs from storage file"""
@@ -41,16 +146,71 @@ class SimpleCostTracker:
                     monthly_history = data.get('monthly_history', {})
                     daily_history = data.get('daily_history', {})
 
-                    monthly_cost = monthly_history.get(self.current_month, 0.0)
-                    daily_cost = daily_history.get(self.current_date, 0.0)
+                    monthly_data = monthly_history.get(self.current_month, {})
+                    daily_data = daily_history.get(self.current_date, {})
+
+                    # Sum all providers for total cost
+                    monthly_cost = sum(v for k, v in monthly_data.items() if k != 'total')
+                    daily_cost = sum(v for k, v in daily_data.items() if k != 'total')
 
                     return monthly_cost, daily_cost
         except:
             pass
         return 0.0, 0.0
 
-    def save_costs(self):
-        """Save monthly and daily costs to storage file with history"""
+    def load_provider_costs(self) -> tuple[Dict[str, float], Dict[str, float]]:
+        """Load provider-specific monthly and daily costs from storage file"""
+        try:
+            if os.path.exists(self.storage_file):
+                with open(self.storage_file, 'r') as f:
+                    data = json.load(f)
+
+                    # Get provider-specific costs from simplified history
+                    monthly_providers = data.get('monthly_history', {}).get(self.current_month, {})
+                    daily_providers = data.get('daily_history', {}).get(self.current_date, {})
+
+                    # Remove 'total' key if it exists
+                    monthly_providers = {k: v for k, v in monthly_providers.items() if k != 'total'}
+                    daily_providers = {k: v for k, v in daily_providers.items() if k != 'total'}
+
+                    return monthly_providers, daily_providers
+        except:
+            pass
+        return {}, {}
+
+    def get_combined_totals(self, openai_api_costs=None) -> tuple[float, float]:
+        """Get combined totals from JSON (now includes API costs when available)"""
+        try:
+            if os.path.exists(self.storage_file):
+                with open(self.storage_file, 'r') as f:
+                    data = json.load(f)
+
+                    # Get current provider costs from simplified structure
+                    monthly_providers = data.get('monthly_history', {}).get(self.current_month, {})
+                    daily_providers = data.get('daily_history', {}).get(self.current_date, {})
+
+                    print(f"SIMPLE_COST_TRACKER DEBUG: Raw provider data - monthly: {monthly_providers}")
+                    print(f"SIMPLE_COST_TRACKER DEBUG: Raw provider data - daily: {daily_providers}")
+
+                    # Calculate totals from all providers (including OpenAI API costs if stored)
+                    monthly_total = sum(v for k, v in monthly_providers.items() if k != 'total')
+                    daily_total = sum(v for k, v in daily_providers.items() if k != 'total')
+
+                    print(f"SIMPLE_COST_TRACKER DEBUG: Final totals from JSON - daily: {daily_total}, monthly: {monthly_total}")
+                    return monthly_total, daily_total
+        except Exception as e:
+            print(f"SIMPLE_COST_TRACKER DEBUG: Error in get_combined_totals: {e}")
+            pass
+
+        # Fallback to current instance values
+        return self.monthly_cost, self.daily_cost
+
+
+
+    def save_costs(self, enabled_providers=None):
+        """Save monthly and daily costs to storage file with simplified structure"""
+        if enabled_providers is None:
+            enabled_providers = ['openai', 'anthropic', 'google']
         try:
             # Load existing data to preserve history
             existing_data = {}
@@ -62,12 +222,39 @@ class SimpleCostTracker:
             monthly_history = existing_data.get('monthly_history', {})
             daily_history = existing_data.get('daily_history', {})
 
+            # Ensure current periods exist
+            if self.current_month not in monthly_history:
+                monthly_history[self.current_month] = {}
+            if self.current_date not in daily_history:
+                daily_history[self.current_date] = {}
 
-            # Update current month/day costs
-            monthly_history[self.current_month] = self.monthly_cost
-            daily_history[self.current_date] = self.daily_cost
+            # Ensure all enabled providers exist (even if 0)
+            for provider in enabled_providers:
+                if provider not in monthly_history[self.current_month]:
+                    monthly_history[self.current_month][provider] = 0.0
+                if provider not in daily_history[self.current_date]:
+                    daily_history[self.current_date][provider] = 0.0
 
-            # Prepare data structure with history
+            # Update only the specific providers that were used
+            if not hasattr(self, 'monthly_provider_costs'):
+                self.monthly_provider_costs = {}
+            if not hasattr(self, 'daily_provider_costs'):
+                self.daily_provider_costs = {}
+
+            for provider, cost in self.monthly_provider_costs.items():
+                monthly_history[self.current_month][provider] = cost
+            for provider, cost in self.daily_provider_costs.items():
+                daily_history[self.current_date][provider] = cost
+
+            # Calculate totals for each period
+            monthly_total = sum(v for k, v in monthly_history[self.current_month].items() if k != 'total')
+            daily_total = sum(v for k, v in daily_history[self.current_date].items() if k != 'total')
+
+            # Add totals to history
+            monthly_history[self.current_month]['total'] = monthly_total
+            daily_history[self.current_date]['total'] = daily_total
+
+            # Prepare simplified data structure
             data = {
                 'current_month': self.current_month,
                 'current_date': self.current_date,
@@ -130,7 +317,31 @@ class SimpleCostTracker:
 
         return None
 
-    def track_usage(self, model: str, input_tokens: int, output_tokens: int, skip_unknown: bool = True) -> Optional[str]:
+    def get_provider_from_model(self, model: str) -> str:
+        """Extract provider name from model string"""
+        model_lower = model.lower()
+        if model_lower.startswith('openai.'):
+            return 'openai'
+        elif model_lower.startswith('anthropic.'):
+            return 'anthropic'
+        elif model_lower.startswith('google.'):
+            return 'google'
+        elif model_lower.startswith('openrouter.'):
+            return 'openrouter'
+        else:
+            # For models without prefix, try to infer from model name
+            if 'gpt' in model_lower or 'openai' in model_lower:
+                return 'openai'
+            elif 'claude' in model_lower or 'anthropic' in model_lower:
+                return 'anthropic'
+            elif 'gemini' in model_lower or 'google' in model_lower:
+                return 'google'
+            elif 'openrouter' in model_lower:
+                return 'openrouter'
+            else:
+                return None  # For truly unknown models, skip tracking
+
+    def track_usage(self, model: str, input_tokens: int, output_tokens: int, skip_unknown: bool = True, openai_api_costs: Optional[dict] = None, enabled_providers: Optional[list] = None) -> Optional[str]:
         """Track usage and return formatted cost message"""
         message_cost, found_model = self.calculate_cost(model, input_tokens, output_tokens)
 
@@ -140,25 +351,53 @@ class SimpleCostTracker:
 
         # Load current values from file to respect manual edits
         current_monthly, current_daily = self.load_costs()
+        current_monthly_providers, current_daily_providers = self.load_provider_costs()
 
         # Add message cost to current file values (not memory values)
         self.monthly_cost = current_monthly + message_cost
         self.daily_cost = current_daily + message_cost
 
-        self.save_costs()
+        # Update provider-specific costs
+        provider = self.get_provider_from_model(model)
+        if provider is None:
+            # Skip tracking for unknown models
+            return None
+
+        self.monthly_provider_costs = current_monthly_providers.copy()
+        self.daily_provider_costs = current_daily_providers.copy()
+
+        # For OpenAI, use API costs if available, otherwise use manual tracking
+        if provider == 'openai' and openai_api_costs:
+            self.monthly_provider_costs['openai'] = openai_api_costs.get('monthly_cost', 0.0)
+            self.daily_provider_costs['openai'] = openai_api_costs.get('daily_cost', 0.0)
+        else:
+            # Manual tracking for all other providers or OpenAI without API
+            self.monthly_provider_costs[provider] = self.monthly_provider_costs.get(provider, 0.0) + message_cost
+            self.daily_provider_costs[provider] = self.daily_provider_costs.get(provider, 0.0) + message_cost
+
+        self.save_costs(enabled_providers)
 
         total_tokens = input_tokens + output_tokens
 
+        # Get combined totals for display (manual + OpenAI API if available)
+        provider = self.get_provider_from_model(model)
+        print(f"SIMPLE_COST_TRACKER DEBUG: track_usage - openai_api_costs: {openai_api_costs}, provider: {provider}")
+
+        # Get combined totals (manual tracking for all providers + OpenAI API if available)
+        display_monthly_cost, display_daily_cost = self.get_combined_totals(openai_api_costs)
+
+        print(f"SIMPLE_COST_TRACKER DEBUG: Combined totals - daily: {display_daily_cost}, monthly: {display_monthly_cost}")
+
         # Show different message based on whether model was found
         if found_model:
-            return f"{message_cost:.4f} € for this message, {self.daily_cost:.4f} € today, {self.monthly_cost:.4f} € this month, {total_tokens} tokens used"
+            return f"{message_cost:.4f} € for this message, {display_daily_cost:.2f} € today, {display_monthly_cost:.2f} € this month, {total_tokens} tokens used"
         else:
-            return f"{message_cost:.4f} € for this message, {self.daily_cost:.4f} € today, {self.monthly_cost:.4f} € this month, {total_tokens} tokens used"
+            return f"{message_cost:.4f} € for this message, {display_daily_cost:.2f} € today, {display_monthly_cost:.2f} € this month, {total_tokens} tokens used"
 
 # Open WebUI Filter Implementation
 class Filter:
     class Valves(BaseModel):
-        priority: int = 0
+        priority: int = 1000  # Much higher priority to run after memory system
 
         # Model costs JSON - easily add/remove models and update prices
         model_costs_json: str = Field(
@@ -188,6 +427,36 @@ class Filter:
             description="Show debug messages with token counts and chat IDs for troubleshooting."
         )
 
+        openai_admin_key: str = Field(
+            default="",
+            description="OpenAI Admin Key for fetching real-time cost data. Get it from https://platform.openai.com/settings/organization/admin-keys. Leave empty to use only manual tracking."
+        )
+
+        fetch_openai_costs: bool = Field(
+            default=False,
+            description="Enable fetching real-time OpenAI costs from API. Requires OpenAI Admin Key."
+        )
+
+        enable_openai_tracking: bool = Field(
+            default=True,
+            description="Enable OpenAI cost tracking. Disable if you don't use OpenAI models."
+        )
+
+        enable_anthropic_tracking: bool = Field(
+            default=True,
+            description="Enable Anthropic (Claude) cost tracking. Disable if you don't use Anthropic models."
+        )
+
+        enable_google_tracking: bool = Field(
+            default=True,
+            description="Enable Google (Gemini) cost tracking. Disable if you don't use Google models."
+        )
+
+        enable_openrouter_tracking: bool = Field(
+            default=False,
+            description="Enable OpenRouter cost tracking. Disable if you don't use OpenRouter models."
+        )
+
     def __init__(self):
         self.valves = self.Valves()
         self.tracker = None  # Will be initialized on first use
@@ -198,47 +467,63 @@ class Filter:
             self.tracker = SimpleCostTracker(self.valves.model_costs_json)
         return self.tracker
 
-    async def get_daily_usage_summary(self) -> str:
-        """Get daily usage summary from all configured APIs"""
-        api_keys = {
-            "openai": self.valves.openai_api_key,
-            "anthropic": self.valves.anthropic_api_key,
-            "gemini": self.valves.gemini_api_key,
-            "openrouter": self.valves.openrouter_api_key
-        }
+    def get_enabled_providers(self):
+        """Get list of enabled providers based on valve settings"""
+        enabled_providers = []
+        if self.valves.enable_openai_tracking:
+            enabled_providers.append('openai')
+        if self.valves.enable_anthropic_tracking:
+            enabled_providers.append('anthropic')
+        if self.valves.enable_google_tracking:
+            enabled_providers.append('google')
+        if self.valves.enable_openrouter_tracking:
+            enabled_providers.append('openrouter')
+        return enabled_providers
 
-        # Filter out empty API keys
-        api_keys = {k: v for k, v in api_keys.items() if v.strip()}
+    def get_provider_from_model(self, model: str) -> str:
+        """Extract provider name from model string"""
+        model_lower = model.lower()
+        if model_lower.startswith('openai.'):
+            return 'openai'
+        elif model_lower.startswith('anthropic.'):
+            return 'anthropic'
+        elif model_lower.startswith('google.'):
+            return 'google'
+        elif model_lower.startswith('openrouter.'):
+            return 'openrouter'
+        else:
+            # For models without prefix, try to infer from model name
+            if 'gpt' in model_lower or 'openai' in model_lower:
+                return 'openai'
+            elif 'claude' in model_lower or 'anthropic' in model_lower:
+                return 'anthropic'
+            elif 'gemini' in model_lower or 'google' in model_lower:
+                return 'google'
+            elif 'openrouter' in model_lower:
+                return 'openrouter'
+            else:
+                return None  # For truly unknown models, skip tracking
 
-        if not api_keys:
+    async def get_openai_costs(self) -> str:
+        """Get OpenAI costs from API if enabled"""
+        if not self.valves.fetch_openai_costs or not self.valves.openai_admin_key.strip():
             return ""
 
         try:
-            async with APIUsageFetcher(api_keys) as fetcher:
-                usage_data = await fetcher.fetch_all_usage()
+            fetcher = OpenAIAPIFetcher(self.valves.openai_admin_key)
+            result = await fetcher.get_daily_costs()
 
-                if "error" in usage_data:
-                    return f"\n\n📊 Usage fetch error: {usage_data['error']}"
+            if "error" in result:
+                return f"\n\n📊 OpenAI API Error: {result['error']}"
 
-                summary_lines = [f"\n\n📊 Daily Usage Summary ({usage_data['date']}):"]
+            cost = result.get("cost", 0.0)
+            date = result.get("date", "today")
+            currency = result.get("currency", "USD")
 
-                for provider_data in usage_data["providers"]:
-                    provider = provider_data.get("provider", "Unknown")
-                    if "error" in provider_data:
-                        summary_lines.append(f"• {provider}: {provider_data['error']}")
-                    elif "note" in provider_data:
-                        summary_lines.append(f"• {provider}: {provider_data['note']}")
-                    else:
-                        summary_lines.append(f"• {provider}: Data available")
+            return f"\n\n📊 OpenAI costs for {date}: ${cost:.4f} {currency}"
 
-                if usage_data["errors"]:
-                    summary_lines.append("Errors:")
-                    for error in usage_data["errors"]:
-                        summary_lines.append(f"• {error}")
-
-                return "\n".join(summary_lines)
         except Exception as e:
-            return f"\n\n📊 Usage summary error: {str(e)}"
+            return f"\n\n📊 OpenAI API fetch error: {str(e)}"
 
     def count_tokens_exact(self, text: str) -> int:
         """Count tokens exactly using tiktoken"""
@@ -250,63 +535,85 @@ class Filter:
             # Fallback to rough estimation if tiktoken fails
             return len(text) // 4
 
+    def calculate_complete_tokens(self, body: dict) -> int:
+        """Calculate tokens from the complete request including all system prompts"""
+        print(f"SIMPLE_COST_TRACKER DEBUG: Request body keys: {list(body.keys())}")
+
+        messages = body.get("messages", [])
+        total_text = ""
+        system_token_count = 0
+        user_token_count = 0
+        assistant_token_count = 0
+
+        print(f"SIMPLE_COST_TRACKER DEBUG: Processing {len(messages)} messages")
+
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            content_tokens = self.count_tokens_exact(content)
+
+            if role == "system":
+                system_token_count += content_tokens
+                print(f"SIMPLE_COST_TRACKER DEBUG: System message {i}: {content_tokens} tokens")
+                if content_tokens > 100:  # Only show preview for long messages
+                    print(f"SIMPLE_COST_TRACKER DEBUG: System content preview: {content[:200]}...")
+            elif role == "user":
+                user_token_count += content_tokens
+                print(f"SIMPLE_COST_TRACKER DEBUG: User message {i}: {content_tokens} tokens")
+            elif role == "assistant":
+                assistant_token_count += content_tokens
+                print(f"SIMPLE_COST_TRACKER DEBUG: Assistant message {i}: {content_tokens} tokens")
+            else:
+                print(f"SIMPLE_COST_TRACKER DEBUG: Unknown role '{role}' message {i}: {content_tokens} tokens")
+
+            total_text += content + " "
+
+        # Check for additional system/prompt fields
+        for key in body.keys():
+            if key != "messages" and isinstance(body[key], str):
+                if "prompt" in key.lower() or "system" in key.lower():
+                    additional_tokens = self.count_tokens_exact(body[key])
+                    system_token_count += additional_tokens
+                    print(f"SIMPLE_COST_TRACKER DEBUG: Additional {key}: {additional_tokens} tokens")
+                    total_text += body[key] + " "
+
+        total_tokens = self.count_tokens_exact(total_text)
+        print(f"SIMPLE_COST_TRACKER DEBUG: Token breakdown - system: {system_token_count}, user: {user_token_count}, assistant: {assistant_token_count}")
+        print(f"SIMPLE_COST_TRACKER DEBUG: Total tokens: {total_tokens}")
+        print(f"SIMPLE_COST_TRACKER DEBUG: Total text length: {len(total_text)}")
+
+        return total_tokens
+
     async def inlet(self, body: dict, __user__: Optional[dict] = None, __event_emitter__ = None) -> dict:
         """
-        Capture the full request being sent to the LLM
+        This runs AFTER memory system - capture the final request with all content
         """
-        # Store the full input for cost calculation
-        if not hasattr(self, '_requests'):
-            self._requests = {}
-
-        # Calculate input tokens from the complete request (includes memories, system prompt, etc.)
-        all_messages = body.get("messages", [])
-        total_input_text = ""
-
-        for msg in all_messages:
-            content = msg.get("content", "")
-            total_input_text += content + " "
-
+        # Store the full input for cost calculation (simple global storage)
         model = body.get("model", "unknown")
-        
-        # Quick check if we should skip this model using JSON valve
-        if self.valves.skip_unknown_models:
-            try:
-                model_costs = json.loads(self.valves.model_costs_json)
-                model_lower = model.lower()
-                found_in_costs = any(key.lower() == model_lower or 
-                                   key.lower() in model_lower or 
-                                   model_lower in key.lower() 
-                                   for key in model_costs.keys())
-                if not found_in_costs:
-                    # Unknown model and skip enabled - don't show processing message
-                    return body
-            except json.JSONDecodeError:
-                # If JSON is invalid, proceed with tracking
-                pass
-        
-        input_tokens = self.count_tokens_exact(total_input_text)
 
-        # Store for later use in outlet - use multiple keys for reliability
-        chat_id = body.get("chat_id", "unknown")
-        session_id = body.get("session_id", "unknown")
-        message_id = body.get("id", "unknown")
+        # Calculate tokens from the complete request (including memory content)
+        input_tokens = self.calculate_complete_tokens(body)
 
-        # Store with multiple possible keys
-        for key in [chat_id, session_id, message_id, "last_request"]:
-            if key != "unknown":
-                self._requests[key] = {
-                    "input_tokens": input_tokens,
-                    "model": model
-                }
+        # Store globally for outlet method (only one request at a time)
+        self._stored_input_tokens = input_tokens
+        self._stored_model = model
 
-        if __event_emitter__:
-            await __event_emitter__({
-                "type": "status",
-                "data": {
-                    "description": f"Processing {input_tokens} input tokens with {model}...",
-                    "done": False
-                }
-            })
+        print(f"SIMPLE_COST_TRACKER DEBUG: Inlet FINAL - stored {input_tokens} tokens globally")
+        print(f"SIMPLE_COST_TRACKER DEBUG: Total messages in request: {len(body.get('messages', []))}")
+
+        # Additional debugging to understand memory injection
+        messages = body.get("messages", [])
+        system_messages = [msg for msg in messages if msg.get("role") == "system"]
+        user_messages = [msg for msg in messages if msg.get("role") == "user"]
+        assistant_messages = [msg for msg in messages if msg.get("role") == "assistant"]
+
+        print(f"SIMPLE_COST_TRACKER DEBUG: Message breakdown - system: {len(system_messages)}, user: {len(user_messages)}, assistant: {len(assistant_messages)}")
+
+        # Show first few characters of each message type for debugging
+        if system_messages:
+            print(f"SIMPLE_COST_TRACKER DEBUG: First system message preview: {system_messages[0].get('content', '')[:100]}...")
+        if user_messages:
+            print(f"SIMPLE_COST_TRACKER DEBUG: First user message preview: {user_messages[0].get('content', '')[:100]}...")
 
         return body
 
@@ -317,56 +624,83 @@ class Filter:
         try:
             # Extract model information
             model = body.get("model", "unknown")
-            chat_id = body.get("chat_id", "unknown")
 
-            # Always use our exact token counting as it includes all context (memories, system prompt, etc.)
+            # Get stored input tokens from inlet method (which captured the complete request with memory)
             input_tokens = 0
-            output_tokens = 0
+            if hasattr(self, '_stored_input_tokens'):
+                input_tokens = self._stored_input_tokens
+                print(f"SIMPLE_COST_TRACKER DEBUG: Using stored input tokens from inlet: {input_tokens}")
+            else:
+                print(f"SIMPLE_COST_TRACKER DEBUG: No stored input tokens found")
 
-            # Get input tokens from inlet method - try multiple keys
-            session_id = body.get("session_id", "unknown")
-            message_id = body.get("id", "unknown")
+            # Use actual LLM usage data for output tokens
+            usage = body.get("usage", {})
+            output_tokens = usage.get("completion_tokens", 0)
 
-            if hasattr(self, '_requests'):
-                for key in [chat_id, session_id, message_id, "last_request"]:
-                    if key in self._requests:
-                        input_tokens = self._requests[key]["input_tokens"]
-                        # Clean up stored data
-                        del self._requests[key]
-                        break
+            print(f"SIMPLE_COST_TRACKER DEBUG: LLM Usage data - input: {usage.get('prompt_tokens', 0)}, output: {output_tokens}")
 
-            # Count output tokens exactly from the last assistant message
-            messages = body.get("messages", [])
-            if messages:
-                for msg in reversed(messages):
-                    if msg.get("role") == "assistant":
-                        output_tokens = self.count_tokens_exact(msg.get("content", ""))
-                        break
+            # If no output tokens from usage data, calculate from the last assistant message
+            if output_tokens == 0:
+                print(f"SIMPLE_COST_TRACKER DEBUG: No output tokens from usage data, calculating from messages")
+                messages = body.get("messages", [])
+                if messages:
+                    for msg in reversed(messages):
+                        if msg.get("role") == "assistant":
+                            output_tokens = self.count_tokens_exact(msg.get("content", ""))
+                            break
 
-            # Debug: Add logging to see what's happening (only in logs, not emitter)
+            # Debug: Add logging to see what's happening
             if self.valves.enable_debug:
-                available_chats = list(self._requests.keys()) if hasattr(self, '_requests') else []
-                print(f"DEBUG: inlet_tokens={input_tokens}, output_tokens={output_tokens}, chat_id={chat_id}, available_chats={available_chats}")
-
-            # If we still don't have tokens, fall back to API data
-            if input_tokens == 0 and output_tokens == 0:
-                usage = body.get("usage", {})
-                input_tokens = usage.get("prompt_tokens", 0)
-                output_tokens = usage.get("completion_tokens", 0)
+                print(f"DEBUG: Final token counts - input: {input_tokens}, output: {output_tokens}, chat_id={body.get('chat_id', 'unknown')}")
 
             # Create status message
             if input_tokens == 0 and output_tokens == 0:
                 status_message = f"No token usage data available for model: {model}"
             else:
+                # Get OpenAI API costs if enabled and model is OpenAI
+                openai_api_costs = None
+                print(f"SIMPLE_COST_TRACKER DEBUG: Checking OpenAI API - fetch_enabled: {self.valves.fetch_openai_costs}, has_key: {bool(self.valves.openai_admin_key.strip())}")
+
+                if self.valves.fetch_openai_costs and self.valves.openai_admin_key.strip():
+                    provider = self.get_provider_from_model(model)
+                    print(f"SIMPLE_COST_TRACKER DEBUG: Model: {model}, Provider: {provider}")
+
+                    if provider == 'openai':
+                        print(f"SIMPLE_COST_TRACKER DEBUG: Fetching OpenAI API costs...")
+                        try:
+                            fetcher = OpenAIAPIFetcher(self.valves.openai_admin_key)
+                            daily_costs = await fetcher.get_daily_costs()
+                            monthly_costs = await fetcher.get_monthly_costs()
+
+                            print(f"SIMPLE_COST_TRACKER DEBUG: Raw daily API response: {daily_costs}")
+                            print(f"SIMPLE_COST_TRACKER DEBUG: Raw monthly API response: {monthly_costs}")
+
+                            openai_api_costs = {
+                                "daily_cost": daily_costs.get("cost", 0.0),
+                                "monthly_cost": monthly_costs.get("cost", 0.0)
+                            }
+
+                            print(f"SIMPLE_COST_TRACKER DEBUG: OpenAI API costs fetched: {openai_api_costs}")
+                        except Exception as e:
+                            print(f"SIMPLE_COST_TRACKER DEBUG: OpenAI API fetch failed: {e}")
+                            pass  # Fallback to manual tracking if API fails
+
                 # Calculate cost and create message
                 tracker = self.get_tracker()
-                cost_message = tracker.track_usage(model, input_tokens, output_tokens, self.valves.skip_unknown_models)
-                
+                enabled_providers = self.get_enabled_providers()
+                cost_message = tracker.track_usage(model, input_tokens, output_tokens, self.valves.skip_unknown_models, openai_api_costs, enabled_providers)
+
                 # If cost_message is None (unknown model and skip_unknown enabled), don't show anything
                 if cost_message is None:
                     return body
-                    
+
                 status_message = cost_message
+
+            # Clean up stored data
+            if hasattr(self, '_stored_input_tokens'):
+                del self._stored_input_tokens
+            if hasattr(self, '_stored_model'):
+                del self._stored_model
 
             # Emit status using event emitter
             if __event_emitter__:

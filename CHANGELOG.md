@@ -1,3 +1,26 @@
+### 1.0.6: 2025-07-09
+
+* Get real-time costs from OpenAI API
+* Add categorized JSON
+* Add valves for model groups
+* Various bugfixes
+* Fix tokens not being counted reliably
+
+### 1.0.5: 2025-07-09
+
+* Simplify JSON structure by removing duplicate provider_history
+* Store provider costs directly in daily_history and monthly_history
+* Add migrate_old_format method to handle migration from old structure
+* Fix complex and messy dual structure issue
+* Improve data storage efficiency and readability
+
+### 1.0.4: 2025-07-09
+
+* Add OpenAI Admin Key integration for real-time cost fetching
+* Add OpenAI API organization costs endpoint support
+* Add fetch_openai_costs valve to enable/disable API fetching
+* Add OpenAI costs display alongside manual tracking
+
 ### 1.0.3: 2025-07-08
 
 * Add skip_unknown_models valve to disable tracking for models without prices
