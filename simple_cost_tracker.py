@@ -270,30 +270,47 @@ class SimpleCostTracker:
 
     def calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> tuple[float, bool]:
         """Calculate cost for given model and token usage"""
+        print(f"SIMPLE_COST_TRACKER DEBUG: calculate_cost called with model: {model}, input: {input_tokens}, output: {output_tokens}")
+
         model_key = self.find_model_key(model)
         found_model = model_key is not None
+
+        print(f"SIMPLE_COST_TRACKER DEBUG: Model key found: {model_key}, found_model: {found_model}")
 
         if not model_key:
             # Unknown models default to 0 cost (likely local models)
             costs = {"input": 0.0, "output": 0.0}
+            print(f"SIMPLE_COST_TRACKER DEBUG: Using default costs: {costs}")
         else:
             costs = self.model_costs[model_key]
+            print(f"SIMPLE_COST_TRACKER DEBUG: Using model costs: {costs}")
 
         input_cost = (input_tokens / 1_000_000) * costs["input"]
         output_cost = (output_tokens / 1_000_000) * costs["output"]
+        total_cost = input_cost + output_cost
 
-        return input_cost + output_cost, found_model
+        print(f"SIMPLE_COST_TRACKER DEBUG: Calculated costs - input: {input_cost}, output: {output_cost}, total: {total_cost}")
+
+        return total_cost, found_model
 
     def get_base_model_id(self, model: str) -> str:
         """Extract base model ID from Open WebUI Model if it's a character"""
+        print(f"SIMPLE_COST_TRACKER DEBUG: Getting base model for: {model}")
+
         try:
             # Try to access Open WebUI Models database
             from open_webui.models.models import Models
 
             model_obj = Models.get_model_by_id(model)
-            if model_obj and model_obj.base_model_id:
+            print(f"SIMPLE_COST_TRACKER DEBUG: Model object: {model_obj}")
+
+            if model_obj and hasattr(model_obj, 'base_model_id') and model_obj.base_model_id:
+                print(f"SIMPLE_COST_TRACKER DEBUG: Found base model: {model_obj.base_model_id}")
                 return model_obj.base_model_id
-        except Exception:
+            else:
+                print(f"SIMPLE_COST_TRACKER DEBUG: No base model found, using original: {model}")
+        except Exception as e:
+            print(f"SIMPLE_COST_TRACKER DEBUG: Error getting base model: {e}")
             # If we can't access the database, return the original model
             pass
 
@@ -301,25 +318,37 @@ class SimpleCostTracker:
 
     def find_model_key(self, model: str) -> Optional[str]:
         """Find matching model key (case-insensitive, partial match)"""
+        print(f"SIMPLE_COST_TRACKER DEBUG: Finding model key for: {model}")
+
         # First try to get the base model if this is a character
         base_model = self.get_base_model_id(model)
         base_model_lower = base_model.lower()
 
+        print(f"SIMPLE_COST_TRACKER DEBUG: Base model: {base_model}, lowercase: {base_model_lower}")
+        print(f"SIMPLE_COST_TRACKER DEBUG: Available model costs keys: {list(self.model_costs.keys())}")
+
         # Exact match first
         for key in self.model_costs:
             if key.lower() == base_model_lower:
+                print(f"SIMPLE_COST_TRACKER DEBUG: Exact match found: {key}")
                 return key
 
         # Partial match
         for key in self.model_costs:
             if key.lower() in base_model_lower or base_model_lower in key.lower():
+                print(f"SIMPLE_COST_TRACKER DEBUG: Partial match found: {key}")
                 return key
 
+        print(f"SIMPLE_COST_TRACKER DEBUG: No match found for: {base_model}")
         return None
 
     def get_provider_from_model(self, model: str) -> str:
-        """Extract provider name from model string"""
-        model_lower = model.lower()
+        """Extract provider name from model string, using base model if needed"""
+        print(f"SIMPLE_COST_TRACKER DEBUG: get_provider_from_model called with: {model}")
+        # First try to get the base model if this is a character
+        base_model = self.get_base_model_id(model)
+        print(f"SIMPLE_COST_TRACKER DEBUG: Base model for provider detection: {base_model}")
+        model_lower = base_model.lower()
         if model_lower.startswith('openai.'):
             return 'openai'
         elif model_lower.startswith('anthropic.'):
@@ -339,14 +368,20 @@ class SimpleCostTracker:
             elif 'openrouter' in model_lower:
                 return 'openrouter'
             else:
+                print(f"SIMPLE_COST_TRACKER DEBUG: No provider found for model: {model} (base: {base_model})")
                 return None  # For truly unknown models, skip tracking
 
     def track_usage(self, model: str, input_tokens: int, output_tokens: int, skip_unknown: bool = True, openai_api_costs: Optional[dict] = None, enabled_providers: Optional[list] = None) -> Optional[str]:
         """Track usage and return formatted cost message"""
+        print(f"SIMPLE_COST_TRACKER DEBUG: track_usage called with model: {model}, input: {input_tokens}, output: {output_tokens}, skip_unknown: {skip_unknown}")
+
         message_cost, found_model = self.calculate_cost(model, input_tokens, output_tokens)
+
+        print(f"SIMPLE_COST_TRACKER DEBUG: track_usage - message_cost: {message_cost}, found_model: {found_model}")
 
         # If skip_unknown is enabled and model not found, return None (no tracking)
         if skip_unknown and not found_model:
+            print(f"SIMPLE_COST_TRACKER DEBUG: Skipping unknown model: {model}")
             return None
 
         # Load current values from file to respect manual edits
@@ -688,13 +723,19 @@ class Filter:
                 # Calculate cost and create message
                 tracker = self.get_tracker()
                 enabled_providers = self.get_enabled_providers()
+                print(f"SIMPLE_COST_TRACKER DEBUG: Calling track_usage with model: {model}, enabled_providers: {enabled_providers}")
+
                 cost_message = tracker.track_usage(model, input_tokens, output_tokens, self.valves.skip_unknown_models, openai_api_costs, enabled_providers)
+
+                print(f"SIMPLE_COST_TRACKER DEBUG: track_usage returned: {cost_message}")
 
                 # If cost_message is None (unknown model and skip_unknown enabled), don't show anything
                 if cost_message is None:
+                    print(f"SIMPLE_COST_TRACKER DEBUG: Cost message is None, returning body without emitter")
                     return body
 
                 status_message = cost_message
+                print(f"SIMPLE_COST_TRACKER DEBUG: Final status message: {status_message}")
 
             # Clean up stored data
             if hasattr(self, '_stored_input_tokens'):
@@ -703,7 +744,9 @@ class Filter:
                 del self._stored_model
 
             # Emit status using event emitter
+            print(f"SIMPLE_COST_TRACKER DEBUG: About to emit status message: {status_message}")
             if __event_emitter__:
+                print(f"SIMPLE_COST_TRACKER DEBUG: Event emitter available, emitting status")
                 await __event_emitter__({
                     "type": "status",
                     "data": {
@@ -711,6 +754,8 @@ class Filter:
                         "done": True
                     }
                 })
+            else:
+                print(f"SIMPLE_COST_TRACKER DEBUG: No event emitter available")
 
         except Exception as e:
             # Show error via event emitter
