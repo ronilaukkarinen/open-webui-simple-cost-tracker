@@ -1,3 +1,8 @@
+### 1.0.7: 2025-07-10
+
+* Fix cost tracker not returning today's date
+* Fix unix timestamp issue
+
 ### 1.0.6: 2025-07-09
 
 * Get real-time costs from OpenAI API

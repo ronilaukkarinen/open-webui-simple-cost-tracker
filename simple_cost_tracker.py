@@ -3,7 +3,7 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.0.6
+version: 1.0.7
 required_open_webui_version: >= 0.5.0
 """
 
@@ -57,8 +57,9 @@ class OpenAIAPIFetcher:
 
     async def get_daily_costs(self) -> dict:
         """Get today's costs from OpenAI API"""
-        # Get start of today in Unix timestamp
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        # Get start of today in Unix timestamp (OpenAI uses UTC)
+        from datetime import timezone
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         start_time = int(today.timestamp())
 
         result = await self.fetch_organization_costs(start_time, 1)
@@ -88,8 +89,9 @@ class OpenAIAPIFetcher:
 
     async def get_monthly_costs(self) -> dict:
         """Get monthly costs from OpenAI API"""
-        # Get start of current month in Unix timestamp
-        today = datetime.now()
+        # Get start of current month in Unix timestamp (OpenAI uses UTC)
+        from datetime import timezone
+        today = datetime.now(timezone.utc)
         month_start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         start_time = int(month_start.timestamp())
 
@@ -142,12 +144,16 @@ class SimpleCostTracker:
                 with open(self.storage_file, 'r') as f:
                     data = json.load(f)
 
+                    # Always use current date/month when loading
+                    current_month = datetime.now().strftime("%Y-%m")
+                    current_date = datetime.now().strftime("%Y-%m-%d")
+
                     # Get current month and day costs from history
                     monthly_history = data.get('monthly_history', {})
                     daily_history = data.get('daily_history', {})
 
-                    monthly_data = monthly_history.get(self.current_month, {})
-                    daily_data = daily_history.get(self.current_date, {})
+                    monthly_data = monthly_history.get(current_month, {})
+                    daily_data = daily_history.get(current_date, {})
 
                     # Sum all providers for total cost
                     monthly_cost = sum(v for k, v in monthly_data.items() if k != 'total')
@@ -165,9 +171,13 @@ class SimpleCostTracker:
                 with open(self.storage_file, 'r') as f:
                     data = json.load(f)
 
+                    # Always use current date/month when loading
+                    current_month = datetime.now().strftime("%Y-%m")
+                    current_date = datetime.now().strftime("%Y-%m-%d")
+
                     # Get provider-specific costs from simplified history
-                    monthly_providers = data.get('monthly_history', {}).get(self.current_month, {})
-                    daily_providers = data.get('daily_history', {}).get(self.current_date, {})
+                    monthly_providers = data.get('monthly_history', {}).get(current_month, {})
+                    daily_providers = data.get('daily_history', {}).get(current_date, {})
 
                     # Remove 'total' key if it exists
                     monthly_providers = {k: v for k, v in monthly_providers.items() if k != 'total'}
@@ -185,9 +195,13 @@ class SimpleCostTracker:
                 with open(self.storage_file, 'r') as f:
                     data = json.load(f)
 
+                    # Always use current date/month when loading
+                    current_month = datetime.now().strftime("%Y-%m")
+                    current_date = datetime.now().strftime("%Y-%m-%d")
+
                     # Get current provider costs from simplified structure
-                    monthly_providers = data.get('monthly_history', {}).get(self.current_month, {})
-                    daily_providers = data.get('daily_history', {}).get(self.current_date, {})
+                    monthly_providers = data.get('monthly_history', {}).get(current_month, {})
+                    daily_providers = data.get('daily_history', {}).get(current_date, {})
 
                     print(f"SIMPLE_COST_TRACKER DEBUG: Raw provider data - monthly: {monthly_providers}")
                     print(f"SIMPLE_COST_TRACKER DEBUG: Raw provider data - daily: {daily_providers}")
@@ -212,6 +226,10 @@ class SimpleCostTracker:
         if enabled_providers is None:
             enabled_providers = ['openai', 'anthropic', 'google']
         try:
+            # Always use current date/month when saving
+            current_month = datetime.now().strftime("%Y-%m")
+            current_date = datetime.now().strftime("%Y-%m-%d")
+
             # Load existing data to preserve history
             existing_data = {}
             if os.path.exists(self.storage_file):
@@ -223,17 +241,17 @@ class SimpleCostTracker:
             daily_history = existing_data.get('daily_history', {})
 
             # Ensure current periods exist
-            if self.current_month not in monthly_history:
-                monthly_history[self.current_month] = {}
-            if self.current_date not in daily_history:
-                daily_history[self.current_date] = {}
+            if current_month not in monthly_history:
+                monthly_history[current_month] = {}
+            if current_date not in daily_history:
+                daily_history[current_date] = {}
 
             # Ensure all enabled providers exist (even if 0)
             for provider in enabled_providers:
-                if provider not in monthly_history[self.current_month]:
-                    monthly_history[self.current_month][provider] = 0.0
-                if provider not in daily_history[self.current_date]:
-                    daily_history[self.current_date][provider] = 0.0
+                if provider not in monthly_history[current_month]:
+                    monthly_history[current_month][provider] = 0.0
+                if provider not in daily_history[current_date]:
+                    daily_history[current_date][provider] = 0.0
 
             # Update only the specific providers that were used
             if not hasattr(self, 'monthly_provider_costs'):
@@ -242,22 +260,22 @@ class SimpleCostTracker:
                 self.daily_provider_costs = {}
 
             for provider, cost in self.monthly_provider_costs.items():
-                monthly_history[self.current_month][provider] = cost
+                monthly_history[current_month][provider] = cost
             for provider, cost in self.daily_provider_costs.items():
-                daily_history[self.current_date][provider] = cost
+                daily_history[current_date][provider] = cost
 
             # Calculate totals for each period
-            monthly_total = sum(v for k, v in monthly_history[self.current_month].items() if k != 'total')
-            daily_total = sum(v for k, v in daily_history[self.current_date].items() if k != 'total')
+            monthly_total = sum(v for k, v in monthly_history[current_month].items() if k != 'total')
+            daily_total = sum(v for k, v in daily_history[current_date].items() if k != 'total')
 
             # Add totals to history
-            monthly_history[self.current_month]['total'] = monthly_total
-            daily_history[self.current_date]['total'] = daily_total
+            monthly_history[current_month]['total'] = monthly_total
+            daily_history[current_date]['total'] = daily_total
 
             # Prepare simplified data structure
             data = {
-                'current_month': self.current_month,
-                'current_date': self.current_date,
+                'current_month': current_month,
+                'current_date': current_date,
                 'monthly_history': monthly_history,
                 'daily_history': daily_history,
                 'last_updated': datetime.now().isoformat()
@@ -388,10 +406,6 @@ class SimpleCostTracker:
         current_monthly, current_daily = self.load_costs()
         current_monthly_providers, current_daily_providers = self.load_provider_costs()
 
-        # Add message cost to current file values (not memory values)
-        self.monthly_cost = current_monthly + message_cost
-        self.daily_cost = current_daily + message_cost
-
         # Update provider-specific costs
         provider = self.get_provider_from_model(model)
         if provider is None:
@@ -403,12 +417,17 @@ class SimpleCostTracker:
 
         # For OpenAI, use API costs if available, otherwise use manual tracking
         if provider == 'openai' and openai_api_costs:
+            # Use API costs directly for OpenAI
             self.monthly_provider_costs['openai'] = openai_api_costs.get('monthly_cost', 0.0)
             self.daily_provider_costs['openai'] = openai_api_costs.get('daily_cost', 0.0)
         else:
             # Manual tracking for all other providers or OpenAI without API
             self.monthly_provider_costs[provider] = self.monthly_provider_costs.get(provider, 0.0) + message_cost
             self.daily_provider_costs[provider] = self.daily_provider_costs.get(provider, 0.0) + message_cost
+
+        # Calculate totals from all provider costs (mix of API and manual)
+        self.monthly_cost = sum(self.monthly_provider_costs.values())
+        self.daily_cost = sum(self.daily_provider_costs.values())
 
         self.save_costs(enabled_providers)
 
