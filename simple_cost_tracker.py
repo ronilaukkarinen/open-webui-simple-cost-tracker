@@ -389,7 +389,7 @@ class SimpleCostTracker:
                 print(f"SIMPLE_COST_TRACKER DEBUG: No provider found for model: {model} (base: {base_model})")
                 return None  # For truly unknown models, skip tracking
 
-    def track_usage(self, model: str, input_tokens: int, output_tokens: int, skip_unknown: bool = True, openai_api_costs: Optional[dict] = None, enabled_providers: Optional[list] = None) -> Optional[str]:
+    def track_usage(self, model: str, input_tokens: int, output_tokens: int, skip_unknown: bool = True, openai_api_costs: Optional[dict] = None, enabled_providers: Optional[list] = None, tokens_only: bool = False) -> Optional[str]:
         """Track usage and return formatted cost message"""
         print(f"SIMPLE_COST_TRACKER DEBUG: track_usage called with model: {model}, input: {input_tokens}, output: {output_tokens}, skip_unknown: {skip_unknown}")
 
@@ -397,20 +397,28 @@ class SimpleCostTracker:
 
         print(f"SIMPLE_COST_TRACKER DEBUG: track_usage - message_cost: {message_cost}, found_model: {found_model}")
 
-        # If skip_unknown is enabled and model not found, return None (no tracking)
-        if skip_unknown and not found_model:
-            print(f"SIMPLE_COST_TRACKER DEBUG: Skipping unknown model: {model}")
+        # Handle unknown models based on valves
+        if not found_model:
+            # If tokens_only is enabled, return tokens-only message (overrides skip_unknown)
+            if tokens_only:
+                total_tokens = input_tokens + output_tokens
+                print(f"SIMPLE_COST_TRACKER DEBUG: Tokens-only mode for unknown model: {model}")
+                return f"{total_tokens} tokens used (Input: {input_tokens}, Output: {output_tokens})"
+            
+            # If skip_unknown is enabled, return None (no tracking)
+            if skip_unknown:
+                print(f"SIMPLE_COST_TRACKER DEBUG: Skipping unknown model: {model}")
+                return None
+
+        # Update provider-specific costs
+        provider = self.get_provider_from_model(model)
+        if provider is None:
+            # Skip tracking for unknown models without provider
             return None
 
         # Load current values from file to respect manual edits
         current_monthly, current_daily = self.load_costs()
         current_monthly_providers, current_daily_providers = self.load_provider_costs()
-
-        # Update provider-specific costs
-        provider = self.get_provider_from_model(model)
-        if provider is None:
-            # Skip tracking for unknown models
-            return None
 
         self.monthly_provider_costs = current_monthly_providers.copy()
         self.daily_provider_costs = current_daily_providers.copy()
@@ -480,6 +488,11 @@ class Filter:
         skip_unknown_models: bool = Field(
             default=True,
             description="Skip cost tracking for models not found in the costs JSON (typically local models with no cost). When enabled, unknown models won't show any cost tracking messages."
+        )
+
+        tokens_only_for_unknown: bool = Field(
+            default=False,
+            description="For unknown models, only show token counts without cost calculation. When enabled, unknown models will display input/output tokens but no cost information."
         )
 
         enable_debug: bool = Field(
@@ -785,7 +798,7 @@ class Filter:
                 enabled_providers = self.get_enabled_providers()
                 print(f"SIMPLE_COST_TRACKER DEBUG: Calling track_usage with model: {model}, enabled_providers: {enabled_providers}")
 
-                cost_message = tracker.track_usage(model, input_tokens, output_tokens, self.valves.skip_unknown_models, openai_api_costs, enabled_providers)
+                cost_message = tracker.track_usage(model, input_tokens, output_tokens, self.valves.skip_unknown_models, openai_api_costs, enabled_providers, self.valves.tokens_only_for_unknown)
 
                 print(f"SIMPLE_COST_TRACKER DEBUG: track_usage returned: {cost_message}")
 
