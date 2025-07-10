@@ -453,6 +453,12 @@ class Filter:
     class Valves(BaseModel):
         priority: int = 1000  # Much higher priority to run after memory system
 
+        # Valve to ignore memory prompt calculation for specific custom models
+        ignore_memory_for_custom_models: str = Field(
+            default="english-refiner,task-manager,custom-,character-",
+            description="Comma-separated list of custom model names/patterns to ignore memory prompt calculation for (e.g., 'english-refiner,task-manager,custom-') - prevents inflated costs"
+        )
+
         # Model costs JSON - easily add/remove models and update prices
         model_costs_json: str = Field(
             default="""{
@@ -638,6 +644,31 @@ class Filter:
 
         return total_tokens
 
+    def should_ignore_memory_calculation(self, model: str) -> bool:
+        """Check if model should ignore memory prompt calculation (custom models from valve)"""
+        if not model:
+            return False
+        
+        # Get the comma-separated list from valve
+        custom_models_list = self.valves.ignore_memory_for_custom_models.strip()
+        print(f"SIMPLE_COST_TRACKER DEBUG: Valve patterns: '{custom_models_list}'")
+        if not custom_models_list:
+            return False
+        
+        # Parse the comma-separated list
+        custom_model_patterns = [pattern.strip() for pattern in custom_models_list.split(',') if pattern.strip()]
+        print(f"SIMPLE_COST_TRACKER DEBUG: Parsed patterns: {custom_model_patterns}")
+        
+        # Check if the model matches any pattern in the list
+        for pattern in custom_model_patterns:
+            print(f"SIMPLE_COST_TRACKER DEBUG: Checking if '{pattern.lower()}' is in '{model.lower()}'")
+            if pattern.lower() in model.lower():
+                print(f"SIMPLE_COST_TRACKER DEBUG: Ignoring memory calculation for custom model: {model} (matched pattern: {pattern})")
+                return True
+        
+        print(f"SIMPLE_COST_TRACKER DEBUG: No pattern matched for model: {model}")
+        return False
+
     async def inlet(self, body: dict, __user__: Optional[dict] = None, __event_emitter__ = None) -> dict:
         """
         This runs AFTER memory system - capture the final request with all content
@@ -645,8 +676,18 @@ class Filter:
         # Store the full input for cost calculation (simple global storage)
         model = body.get("model", "unknown")
 
-        # Calculate tokens from the complete request (including memory content)
-        input_tokens = self.calculate_complete_tokens(body)
+        # Check if we should ignore memory calculation for this model
+        print(f"SIMPLE_COST_TRACKER DEBUG: Checking model '{model}' against valve patterns")
+        if self.should_ignore_memory_calculation(model):
+            # For comma-separated custom models, calculate tokens without memory content
+            # Only count user messages to avoid inflated costs from memory prompts
+            messages = body.get("messages", [])
+            user_messages = [msg for msg in messages if msg.get("role") == "user"]
+            input_tokens = sum(self.count_tokens_exact(msg.get("content", "")) for msg in user_messages)
+            print(f"SIMPLE_COST_TRACKER DEBUG: Using simplified token count (user only): {input_tokens}")
+        else:
+            # Calculate tokens from the complete request (including memory content)
+            input_tokens = self.calculate_complete_tokens(body)
 
         # Store globally for outlet method (only one request at a time)
         self._stored_input_tokens = input_tokens
