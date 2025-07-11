@@ -460,12 +460,8 @@ class SimpleCostTracker:
             else:
                 token_details = f"{total_tokens} tokens used"
 
-            if provider == 'openai' and openai_api_costs:
-                # For OpenAI with API costs, don't show per-message cost
-                return f"{display_daily_cost:.2f} € today, {display_monthly_cost:.2f} € this month. {token_details}"
-            else:
-                # For manual tracking, show per-message cost calculation
-                return f"{message_cost:.4f} € this message, {display_daily_cost:.2f} € today, {display_monthly_cost:.2f} € this month. {token_details}"
+            # Always show per-message cost regardless of API or manual tracking
+            return f"{message_cost:.4f} € this message, {display_daily_cost:.2f} € today, {display_monthly_cost:.2f} € this month. {token_details}"
         else:
             # Unknown model
             if valves and hasattr(valves, 'show_token_details') and valves.show_token_details:
