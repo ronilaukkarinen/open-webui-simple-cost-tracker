@@ -1,3 +1,12 @@
+### 1.0.8: 2025-07-11
+
+* Fix OpenAI API cost tracking to use API costs exclusively when enabled
+* Update display message to show tokens for information while using API costs for tracking
+* Prevent double-counting of OpenAI costs between manual calculation and API fetching
+* Add valve to control showing detailed token breakdown (input/output)
+* Change message format to show costs first, then tokens with parentheses format
+* Fix display to show total costs from all providers instead of just OpenAI API costs
+
 ### 1.0.7: 2025-07-10
 
 * Fix cost tracker not returning today's date

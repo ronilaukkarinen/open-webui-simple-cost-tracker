@@ -3,7 +3,7 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.0.7
+version: 1.0.8
 required_open_webui_version: >= 0.5.0
 """
 
@@ -389,7 +389,7 @@ class SimpleCostTracker:
                 print(f"SIMPLE_COST_TRACKER DEBUG: No provider found for model: {model} (base: {base_model})")
                 return None  # For truly unknown models, skip tracking
 
-    def track_usage(self, model: str, input_tokens: int, output_tokens: int, skip_unknown: bool = True, openai_api_costs: Optional[dict] = None, enabled_providers: Optional[list] = None, tokens_only: bool = False) -> Optional[str]:
+    def track_usage(self, model: str, input_tokens: int, output_tokens: int, skip_unknown: bool = True, openai_api_costs: Optional[dict] = None, enabled_providers: Optional[list] = None, tokens_only: bool = False, valves=None) -> Optional[str]:
         """Track usage and return formatted cost message"""
         print(f"SIMPLE_COST_TRACKER DEBUG: track_usage called with model: {model}, input: {input_tokens}, output: {output_tokens}, skip_unknown: {skip_unknown}")
 
@@ -403,8 +403,8 @@ class SimpleCostTracker:
             if tokens_only:
                 total_tokens = input_tokens + output_tokens
                 print(f"SIMPLE_COST_TRACKER DEBUG: Tokens-only mode for unknown model: {model}")
-                return f"{total_tokens} tokens used (Input: {input_tokens}, Output: {output_tokens})"
-            
+                return f"{total_tokens} tokens used ({input_tokens} in, {output_tokens} out)"
+
             # If skip_unknown is enabled, return None (no tracking)
             if skip_unknown:
                 print(f"SIMPLE_COST_TRACKER DEBUG: Skipping unknown model: {model}")
@@ -425,13 +425,15 @@ class SimpleCostTracker:
 
         # For OpenAI, use API costs if available, otherwise use manual tracking
         if provider == 'openai' and openai_api_costs:
-            # Use API costs directly for OpenAI
+            # Use API costs directly for OpenAI (replace, don't add to existing)
             self.monthly_provider_costs['openai'] = openai_api_costs.get('monthly_cost', 0.0)
             self.daily_provider_costs['openai'] = openai_api_costs.get('daily_cost', 0.0)
+            print(f"SIMPLE_COST_TRACKER DEBUG: Using OpenAI API costs - Monthly: {self.monthly_provider_costs['openai']}, Daily: {self.daily_provider_costs['openai']}")
         else:
             # Manual tracking for all other providers or OpenAI without API
             self.monthly_provider_costs[provider] = self.monthly_provider_costs.get(provider, 0.0) + message_cost
             self.daily_provider_costs[provider] = self.daily_provider_costs.get(provider, 0.0) + message_cost
+            print(f"SIMPLE_COST_TRACKER DEBUG: Using manual tracking for {provider} - added {message_cost}")
 
         # Calculate totals from all provider costs (mix of API and manual)
         self.monthly_cost = sum(self.monthly_provider_costs.values())
@@ -452,9 +454,25 @@ class SimpleCostTracker:
 
         # Show different message based on whether model was found
         if found_model:
-            return f"{message_cost:.4f} € for this message, {display_daily_cost:.2f} € today, {display_monthly_cost:.2f} € this month, {total_tokens} tokens used"
+            # Build token details string based on valve setting
+            if valves and hasattr(valves, 'show_token_details') and valves.show_token_details:
+                token_details = f"{total_tokens} tokens used ({input_tokens} in, {output_tokens} out)"
+            else:
+                token_details = f"{total_tokens} tokens used"
+
+            if provider == 'openai' and openai_api_costs:
+                # For OpenAI with API costs, don't show per-message cost
+                return f"{display_daily_cost:.2f} € today, {display_monthly_cost:.2f} € this month. {token_details}"
+            else:
+                # For manual tracking, show per-message cost calculation
+                return f"{message_cost:.4f} € this message, {display_daily_cost:.2f} € today, {display_monthly_cost:.2f} € this month. {token_details}"
         else:
-            return f"{message_cost:.4f} € for this message, {display_daily_cost:.2f} € today, {display_monthly_cost:.2f} € this month, {total_tokens} tokens used"
+            # Unknown model
+            if valves and hasattr(valves, 'show_token_details') and valves.show_token_details:
+                token_details = f"{total_tokens} tokens used ({input_tokens} in, {output_tokens} out)"
+            else:
+                token_details = f"{total_tokens} tokens used"
+            return f"{message_cost:.4f} € this message, {display_daily_cost:.2f} € today, {display_monthly_cost:.2f} € this month. {token_details}"
 
 # Open WebUI Filter Implementation
 class Filter:
@@ -508,6 +526,11 @@ class Filter:
         fetch_openai_costs: bool = Field(
             default=False,
             description="Enable fetching real-time OpenAI costs from API. Requires OpenAI Admin Key."
+        )
+
+        show_token_details: bool = Field(
+            default=True,
+            description="Show detailed input/output token breakdown in the cost message. When disabled, only shows total tokens."
         )
 
         enable_openai_tracking: bool = Field(
@@ -661,24 +684,24 @@ class Filter:
         """Check if model should ignore memory prompt calculation (custom models from valve)"""
         if not model:
             return False
-        
+
         # Get the comma-separated list from valve
         custom_models_list = self.valves.ignore_memory_for_custom_models.strip()
         print(f"SIMPLE_COST_TRACKER DEBUG: Valve patterns: '{custom_models_list}'")
         if not custom_models_list:
             return False
-        
+
         # Parse the comma-separated list
         custom_model_patterns = [pattern.strip() for pattern in custom_models_list.split(',') if pattern.strip()]
         print(f"SIMPLE_COST_TRACKER DEBUG: Parsed patterns: {custom_model_patterns}")
-        
+
         # Check if the model matches any pattern in the list
         for pattern in custom_model_patterns:
             print(f"SIMPLE_COST_TRACKER DEBUG: Checking if '{pattern.lower()}' is in '{model.lower()}'")
             if pattern.lower() in model.lower():
                 print(f"SIMPLE_COST_TRACKER DEBUG: Ignoring memory calculation for custom model: {model} (matched pattern: {pattern})")
                 return True
-        
+
         print(f"SIMPLE_COST_TRACKER DEBUG: No pattern matched for model: {model}")
         return False
 
@@ -798,7 +821,7 @@ class Filter:
                 enabled_providers = self.get_enabled_providers()
                 print(f"SIMPLE_COST_TRACKER DEBUG: Calling track_usage with model: {model}, enabled_providers: {enabled_providers}")
 
-                cost_message = tracker.track_usage(model, input_tokens, output_tokens, self.valves.skip_unknown_models, openai_api_costs, enabled_providers, self.valves.tokens_only_for_unknown)
+                cost_message = tracker.track_usage(model, input_tokens, output_tokens, self.valves.skip_unknown_models, openai_api_costs, enabled_providers, self.valves.tokens_only_for_unknown, self.valves)
 
                 print(f"SIMPLE_COST_TRACKER DEBUG: track_usage returned: {cost_message}")
 
@@ -842,5 +865,3 @@ class Filter:
                 })
 
         return body
-
-
