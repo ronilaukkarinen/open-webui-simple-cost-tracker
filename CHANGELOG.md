@@ -1,3 +1,9 @@
+### 1.0.9: 2025-07-12
+
+* Fix timezone issue causing 0.00 € cost between 00-03 hours by switching to UTC timestamps
+* Restore "processing x tokens" emitter with 10-second timeout to prevent infinite hangs
+* Add timeout protection to all event emitters
+
 ### 1.0.8: 2025-07-11
 
 * Fix OpenAI API cost tracking to use API costs exclusively when enabled

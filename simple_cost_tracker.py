@@ -3,7 +3,7 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.0.8
+version: 1.0.9
 required_open_webui_version: >= 0.5.0
 """
 
@@ -11,7 +11,7 @@ import json
 import os
 import asyncio
 import aiohttp
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 import tiktoken
@@ -132,8 +132,10 @@ class SimpleCostTracker:
 
         # Storage file for tracking costs
         self.storage_file = "cost_tracker_data.json"
-        self.current_month = datetime.now().strftime("%Y-%m")
-        self.current_date = datetime.now().strftime("%Y-%m-%d")
+        # Use UTC for consistency with OpenAI API
+        utc_now = datetime.now(timezone.utc)
+        self.current_month = utc_now.strftime("%Y-%m")
+        self.current_date = utc_now.strftime("%Y-%m-%d")
         self.monthly_cost, self.daily_cost = self.load_costs()
         self.monthly_provider_costs, self.daily_provider_costs = self.load_provider_costs()
 
@@ -144,9 +146,10 @@ class SimpleCostTracker:
                 with open(self.storage_file, 'r') as f:
                     data = json.load(f)
 
-                    # Always use current date/month when loading
-                    current_month = datetime.now().strftime("%Y-%m")
-                    current_date = datetime.now().strftime("%Y-%m-%d")
+                    # Always use current date/month when loading (UTC for consistency)
+                    utc_now = datetime.now(timezone.utc)
+                    current_month = utc_now.strftime("%Y-%m")
+                    current_date = utc_now.strftime("%Y-%m-%d")
 
                     # Get current month and day costs from history
                     monthly_history = data.get('monthly_history', {})
@@ -171,9 +174,10 @@ class SimpleCostTracker:
                 with open(self.storage_file, 'r') as f:
                     data = json.load(f)
 
-                    # Always use current date/month when loading
-                    current_month = datetime.now().strftime("%Y-%m")
-                    current_date = datetime.now().strftime("%Y-%m-%d")
+                    # Always use current date/month when loading (UTC for consistency)
+                    utc_now = datetime.now(timezone.utc)
+                    current_month = utc_now.strftime("%Y-%m")
+                    current_date = utc_now.strftime("%Y-%m-%d")
 
                     # Get provider-specific costs from simplified history
                     monthly_providers = data.get('monthly_history', {}).get(current_month, {})
@@ -195,9 +199,10 @@ class SimpleCostTracker:
                 with open(self.storage_file, 'r') as f:
                     data = json.load(f)
 
-                    # Always use current date/month when loading
-                    current_month = datetime.now().strftime("%Y-%m")
-                    current_date = datetime.now().strftime("%Y-%m-%d")
+                    # Always use current date/month when loading (UTC for consistency)
+                    utc_now = datetime.now(timezone.utc)
+                    current_month = utc_now.strftime("%Y-%m")
+                    current_date = utc_now.strftime("%Y-%m-%d")
 
                     # Get current provider costs from simplified structure
                     monthly_providers = data.get('monthly_history', {}).get(current_month, {})
@@ -226,9 +231,10 @@ class SimpleCostTracker:
         if enabled_providers is None:
             enabled_providers = ['openai', 'anthropic', 'google']
         try:
-            # Always use current date/month when saving
-            current_month = datetime.now().strftime("%Y-%m")
-            current_date = datetime.now().strftime("%Y-%m-%d")
+            # Always use current date/month when saving (UTC for consistency)
+            utc_now = datetime.now(timezone.utc)
+            current_month = utc_now.strftime("%Y-%m")
+            current_date = utc_now.strftime("%Y-%m-%d")
 
             # Load existing data to preserve history
             existing_data = {}
@@ -725,6 +731,22 @@ class Filter:
         self._stored_input_tokens = input_tokens
         self._stored_model = model
 
+        # Emit processing status with token count and timeout
+        if __event_emitter__:
+            try:
+                import asyncio
+                await asyncio.wait_for(__event_emitter__({
+                    "type": "status",
+                    "data": {
+                        "description": f"Processing {input_tokens} input tokens with {model}...",
+                        "done": False
+                    }
+                }), timeout=10.0)  # 10 second timeout
+            except asyncio.TimeoutError:
+                print(f"SIMPLE_COST_TRACKER DEBUG: Processing emitter timed out after 10 seconds")
+            except Exception as emit_error:
+                print(f"SIMPLE_COST_TRACKER DEBUG: Processing emitter error: {emit_error}")
+
         print(f"SIMPLE_COST_TRACKER DEBUG: Inlet FINAL - stored {input_tokens} tokens globally")
         print(f"SIMPLE_COST_TRACKER DEBUG: Total messages in request: {len(body.get('messages', []))}")
 
@@ -835,29 +857,41 @@ class Filter:
             if hasattr(self, '_stored_model'):
                 del self._stored_model
 
-            # Emit status using event emitter
+            # Emit final status using event emitter with timeout
             print(f"SIMPLE_COST_TRACKER DEBUG: About to emit status message: {status_message}")
             if __event_emitter__:
                 print(f"SIMPLE_COST_TRACKER DEBUG: Event emitter available, emitting status")
-                await __event_emitter__({
-                    "type": "status",
-                    "data": {
-                        "description": status_message,
-                        "done": True
-                    }
-                })
+                try:
+                    import asyncio
+                    await asyncio.wait_for(__event_emitter__({
+                        "type": "status",
+                        "data": {
+                            "description": status_message,
+                            "done": True
+                        }
+                    }), timeout=10.0)  # 10 second timeout
+                except asyncio.TimeoutError:
+                    print(f"SIMPLE_COST_TRACKER DEBUG: Event emitter timed out after 10 seconds")
+                except Exception as emit_error:
+                    print(f"SIMPLE_COST_TRACKER DEBUG: Event emitter error: {emit_error}")
             else:
                 print(f"SIMPLE_COST_TRACKER DEBUG: No event emitter available")
 
         except Exception as e:
-            # Show error via event emitter
+            # Show error via event emitter with timeout
             if __event_emitter__:
-                await __event_emitter__({
-                    "type": "status",
-                    "data": {
-                        "description": f"Cost tracking error: {str(e)}",
-                        "done": True
-                    }
-                })
+                try:
+                    import asyncio
+                    await asyncio.wait_for(__event_emitter__({
+                        "type": "status",
+                        "data": {
+                            "description": f"Cost tracking error: {str(e)}",
+                            "done": True
+                        }
+                    }), timeout=10.0)  # 10 second timeout
+                except asyncio.TimeoutError:
+                    print(f"SIMPLE_COST_TRACKER DEBUG: Error emitter timed out after 10 seconds")
+                except Exception as emit_error:
+                    print(f"SIMPLE_COST_TRACKER DEBUG: Error emitter failed: {emit_error}")
 
         return body
