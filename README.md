@@ -54,7 +54,7 @@ For initial costs, edit `cost_tracker_data.json` file manually, costs will add u
 Once enabled, the cost tracker automatically displays status messages after each AI response:
 
 ```
-0.0123 € this month, 0.0045 € today, 0.0012 € for this message, 1247 tokens used
+0.0052 € this message, 0.47 € today, 13.20 € this month. 11746 tokens used (11313 in, 433 out)
 ```
 
 ## 📁 Data Storage
