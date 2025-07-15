@@ -1,3 +1,7 @@
+### 1.0.10: 2025-07-15
+
+* Add valve to control processing emitter (default: false) to prevent getting stuck with local models
+
 ### 1.0.9: 2025-07-12
 
 * Fix timezone issue causing 0.00 € cost between 00-03 hours by switching to UTC timestamps

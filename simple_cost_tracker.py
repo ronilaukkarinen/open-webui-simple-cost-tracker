@@ -3,7 +3,7 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.0.9
+version: 1.0.10
 required_open_webui_version: >= 0.5.0
 """
 
@@ -555,6 +555,11 @@ class Filter:
             description="Enable OpenRouter cost tracking. Disable if you don't use OpenRouter models."
         )
 
+        enable_processing_emitter: bool = Field(
+            default=False,
+            description="Enable processing status emitter that shows input tokens and model while processing. Disable if it gets stuck with local models."
+        )
+
     def __init__(self):
         self.valves = self.Valves()
         self.tracker = None  # Will be initialized on first use
@@ -731,8 +736,8 @@ class Filter:
         self._stored_input_tokens = input_tokens
         self._stored_model = model
 
-        # Emit processing status with token count and timeout
-        if __event_emitter__:
+        # Emit processing status with token count and timeout (only if valve is enabled)
+        if __event_emitter__ and self.valves.enable_processing_emitter:
             try:
                 import asyncio
                 await asyncio.wait_for(__event_emitter__({
