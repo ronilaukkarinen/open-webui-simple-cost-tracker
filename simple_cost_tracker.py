@@ -3,7 +3,7 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.0.12
+version: 1.0.13
 required_open_webui_version: >= 0.5.0
 """
 
@@ -560,6 +560,11 @@ class Filter:
             description="Enable processing status emitter that shows input tokens and model while processing. Disable if it gets stuck with local models."
         )
 
+        disable_for_image_generation: bool = Field(
+            default=True,
+            description="Disable cost tracking for image generation requests (when Image button is clicked). Prevents interference with image generation prompts."
+        )
+
     def __init__(self):
         self.valves = self.Valves()
         self.tracker = None  # Will be initialized on first use
@@ -747,10 +752,80 @@ class Filter:
         print(f"SIMPLE_COST_TRACKER DEBUG: No pattern matched for model: {model}")
         return False
 
-    async def inlet(self, body: dict, __user__: Optional[dict] = None, __event_emitter__ = None) -> dict:
+    def is_image_generation_request(self, body: dict, __request__ = None) -> bool:
+        """Detect if this is an image generation request using official Open WebUI detection"""
+        
+        # Debug: Log the request details for analysis
+        print(f"SIMPLE_COST_TRACKER DEBUG: is_image_generation_request - body keys: {list(body.keys())}")
+        if __request__ and hasattr(__request__, 'url'):
+            print(f"SIMPLE_COST_TRACKER DEBUG: is_image_generation_request - URL: {__request__.url}")
+        
+        # Method 1: Check if request URL contains image generation endpoint
+        if __request__ and hasattr(__request__, 'url'):
+            url_str = str(__request__.url)
+            if '/api/images/generations' in url_str:
+                print(f"SIMPLE_COST_TRACKER DEBUG: Detected image generation request - URL contains /api/images/generations")
+                return True
+        
+        # Method 2: Check for image generation specific parameters in request body
+        # Based on Open WebUI's GenerateImageForm parameters
+        image_params = ['size', 'n', 'response_format']
+        has_image_params = any(param in body for param in image_params)
+        
+        # Also check if this looks like an image generation request structure
+        has_prompt_only = 'prompt' in body and len([k for k in body.keys() if k not in ['prompt', 'model']]) == 0
+        
+        if has_image_params or has_prompt_only:
+            print(f"SIMPLE_COST_TRACKER DEBUG: Detected image generation request - contains image-specific parameters")
+            return True
+        
+        # Method 3: Check for Open WebUI image generation context
+        if 'prompt' in body and not 'messages' in body:
+            # Image requests typically have 'prompt' but not 'messages' (which is for chat)
+            print(f"SIMPLE_COST_TRACKER DEBUG: Detected image generation request - has prompt but no messages")
+            return True
+        
+        # Method 4: Check request metadata for image generation hints
+        # Look for Open WebUI specific metadata that indicates image generation
+        metadata = body.get('metadata', {})
+        if metadata:
+            # Check if metadata contains image generation flags
+            if metadata.get('image_generation') or metadata.get('generate_image'):
+                print(f"SIMPLE_COST_TRACKER DEBUG: Detected image generation request - metadata contains image generation flag")
+                return True
+        
+        # Method 5: Check features field for image generation
+        features = body.get('features', {})
+        if features:
+            # Check if features indicates image generation
+            if features.get('image_generation') or features.get('generate_image'):
+                print(f"SIMPLE_COST_TRACKER DEBUG: Detected image generation request - features contains image generation flag")
+                return True
+        
+        # Method 6: Check options field for image generation
+        options = body.get('options', {})
+        if options:
+            # Check if options indicates image generation
+            if options.get('image_generation') or options.get('generate_image'):
+                print(f"SIMPLE_COST_TRACKER DEBUG: Detected image generation request - options contains image generation flag")
+                return True
+        
+        return False
+
+    async def inlet(self, body: dict, __user__: Optional[dict] = None, __event_emitter__ = None, __request__ = None) -> dict:
         """
         This runs AFTER memory system - capture the final request with all content
         """
+        # Check if this is an image generation request and if we should skip processing
+        if self.valves.disable_for_image_generation and self.is_image_generation_request(body, __request__):
+            print(f"SIMPLE_COST_TRACKER DEBUG: Skipping cost tracking for image generation request")
+            # Set flag to skip outlet processing as well
+            self._skip_image_generation = True
+            return body
+        
+        # Reset skip flag for regular requests
+        self._skip_image_generation = False
+        
         # Store the full input for cost calculation (simple global storage)
         model = body.get("model", "unknown")
 
@@ -830,6 +905,11 @@ class Filter:
         """
         Process output after model response to track costs
         """
+        # Skip processing if this was an image generation request
+        if hasattr(self, '_skip_image_generation') and self._skip_image_generation:
+            print(f"SIMPLE_COST_TRACKER DEBUG: Skipping outlet processing for image generation request")
+            return body
+        
         try:
             # Extract model information
             model = body.get("model", "unknown")
