@@ -1,4 +1,4 @@
-### 1.0.13: 2025-07-16
+### 1.0.13: 2025-07-17
 
 * Add valve to disable function for image generation (default: true) to prevent interference with image generation prompts
 * Add comprehensive Open WebUI image generation request detection (URL endpoint, metadata, features, options fields)
