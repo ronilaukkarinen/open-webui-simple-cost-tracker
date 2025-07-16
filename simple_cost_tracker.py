@@ -3,7 +3,7 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.0.10
+version: 1.0.12
 required_open_webui_version: >= 0.5.0
 """
 
@@ -628,15 +628,31 @@ class Filter:
         except Exception as e:
             return f"\n\n📊 OpenAI API fetch error: {str(e)}"
 
-    def count_tokens_exact(self, text: str) -> int:
+    def count_tokens_exact(self, text) -> int:
         """Count tokens exactly using tiktoken"""
         try:
+            # Handle multimodal content (list of content objects)
+            if isinstance(text, list):
+                # Extract only text content for token counting
+                text_content = ""
+                for content in text:
+                    if isinstance(content, dict) and content.get("type") == "text":
+                        text_content += content.get("text", "")
+                text = text_content
+            
+            # Ensure text is a string
+            if not isinstance(text, str):
+                text = str(text)
+            
             # Use cl100k_base encoding for most models (GPT-4, GPT-3.5, etc.)
             encoding = tiktoken.get_encoding("cl100k_base")
             return len(encoding.encode(text))
         except:
             # Fallback to rough estimation if tiktoken fails
-            return len(text) // 4
+            if isinstance(text, str):
+                return len(text) // 4
+            else:
+                return 0
 
     def calculate_complete_tokens(self, body: dict) -> int:
         """Calculate tokens from the complete request including all system prompts"""
@@ -659,7 +675,17 @@ class Filter:
                 system_token_count += content_tokens
                 print(f"SIMPLE_COST_TRACKER DEBUG: System message {i}: {content_tokens} tokens")
                 if content_tokens > 100:  # Only show preview for long messages
-                    print(f"SIMPLE_COST_TRACKER DEBUG: System content preview: {content[:200]}...")
+                    # Handle multimodal content for preview
+                    if isinstance(content, list):
+                        # Extract text content for preview
+                        text_content = ""
+                        for content_item in content:
+                            if isinstance(content_item, dict) and content_item.get("type") == "text":
+                                text_content += content_item.get("text", "")
+                        preview_text = text_content[:200]
+                    else:
+                        preview_text = str(content)[:200]
+                    print(f"SIMPLE_COST_TRACKER DEBUG: System content preview: {preview_text}...")
             elif role == "user":
                 user_token_count += content_tokens
                 print(f"SIMPLE_COST_TRACKER DEBUG: User message {i}: {content_tokens} tokens")
@@ -669,7 +695,16 @@ class Filter:
             else:
                 print(f"SIMPLE_COST_TRACKER DEBUG: Unknown role '{role}' message {i}: {content_tokens} tokens")
 
-            total_text += content + " "
+            # Handle multimodal content for total_text accumulation
+            if isinstance(content, list):
+                # Extract only text content for total_text
+                text_content = ""
+                for content_item in content:
+                    if isinstance(content_item, dict) and content_item.get("type") == "text":
+                        text_content += content_item.get("text", "")
+                total_text += text_content + " "
+            else:
+                total_text += str(content) + " "
 
         # Check for additional system/prompt fields
         for key in body.keys():
@@ -765,9 +800,29 @@ class Filter:
 
         # Show first few characters of each message type for debugging
         if system_messages:
-            print(f"SIMPLE_COST_TRACKER DEBUG: First system message preview: {system_messages[0].get('content', '')[:100]}...")
+            content = system_messages[0].get('content', '')
+            if isinstance(content, list):
+                # Extract text content for preview
+                text_content = ""
+                for content_item in content:
+                    if isinstance(content_item, dict) and content_item.get("type") == "text":
+                        text_content += content_item.get("text", "")
+                preview_text = text_content[:100]
+            else:
+                preview_text = str(content)[:100]
+            print(f"SIMPLE_COST_TRACKER DEBUG: First system message preview: {preview_text}...")
         if user_messages:
-            print(f"SIMPLE_COST_TRACKER DEBUG: First user message preview: {user_messages[0].get('content', '')[:100]}...")
+            content = user_messages[0].get('content', '')
+            if isinstance(content, list):
+                # Extract text content for preview
+                text_content = ""
+                for content_item in content:
+                    if isinstance(content_item, dict) and content_item.get("type") == "text":
+                        text_content += content_item.get("text", "")
+                preview_text = text_content[:100]
+            else:
+                preview_text = str(content)[:100]
+            print(f"SIMPLE_COST_TRACKER DEBUG: First user message preview: {preview_text}...")
 
         return body
 

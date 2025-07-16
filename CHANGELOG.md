@@ -1,3 +1,15 @@
+### 1.0.12: 2025-07-16
+
+* Fix multimodal content (text + images) handling in token counting
+* Fix "can only concatenate list (not "str") to list" error when sending images
+* Add proper type checking for message content in count_tokens_exact method
+* Fix debug message previews to handle multimodal content properly
+* Improve error handling for mixed content types
+
+### 1.0.11: 2025-07-16
+
+* Fix initial multimodal content handling in token counting method
+
 ### 1.0.10: 2025-07-15
 
 * Add valve to control processing emitter (default: false) to prevent getting stuck with local models
