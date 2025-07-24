@@ -1,3 +1,8 @@
+### 1.1.0: 2025-07-24
+
+* Add valve to completely exclude chosen custom models
+* Fix possible syntaxerrors
+
 ### 1.0.13: 2025-07-17
 
 * Add valve to disable function for image generation (default: true) to prevent interference with image generation prompts
@@ -70,6 +75,12 @@
 * Fix monthly/daily cost persistence with historical data storage
 * Add support for Open WebUI Models (characters) base model extraction
 * Improve manual edit handling to respect user modifications
+
+### 1.0.3: 2025-07-24
+
+* Add valve to completely exclude cost tracking for specific comma-separated custom models
+* Add should_exclude_cost_tracking method for checking model exclusion patterns
+* Modify inlet and outlet methods to skip processing for excluded models
 
 ### 1.0.2: 2025-07-08
 

@@ -3,7 +3,7 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.0.13
+version: 1.1.0
 required_open_webui_version: >= 0.5.0
 """
 
@@ -487,6 +487,12 @@ class Filter:
             description="Comma-separated list of custom model names/patterns to ignore memory prompt calculation for (e.g., 'english-refiner,task-manager,custom-') - prevents inflated costs"
         )
 
+        # Valve to completely exclude cost tracking for specific custom models
+        exclude_cost_tracking_for_models: str = Field(
+            default="",
+            description="Comma-separated list of model names/patterns to completely exclude from cost tracking (e.g., 'my-custom-model,another-model'). No cost tracking will be performed for these models."
+        )
+
         # Model costs JSON - easily add/remove models and update prices
         model_costs_json: str = Field(
             default="""{
@@ -752,6 +758,31 @@ class Filter:
         print(f"SIMPLE_COST_TRACKER DEBUG: No pattern matched for model: {model}")
         return False
 
+    def should_exclude_cost_tracking(self, model: str) -> bool:
+        """Check if model should be completely excluded from cost tracking"""
+        if not model:
+            return False
+
+        # Get the comma-separated list from valve
+        excluded_models_list = self.valves.exclude_cost_tracking_for_models.strip()
+        print(f"SIMPLE_COST_TRACKER DEBUG: Excluded models patterns: '{excluded_models_list}'")
+        if not excluded_models_list:
+            return False
+
+        # Parse the comma-separated list
+        excluded_model_patterns = [pattern.strip() for pattern in excluded_models_list.split(',') if pattern.strip()]
+        print(f"SIMPLE_COST_TRACKER DEBUG: Parsed excluded patterns: {excluded_model_patterns}")
+
+        # Check if the model matches any pattern in the list
+        for pattern in excluded_model_patterns:
+            print(f"SIMPLE_COST_TRACKER DEBUG: Checking if '{pattern.lower()}' is in '{model.lower()}'")
+            if pattern.lower() in model.lower():
+                print(f"SIMPLE_COST_TRACKER DEBUG: Excluding cost tracking for model: {model} (matched pattern: {pattern})")
+                return True
+
+        print(f"SIMPLE_COST_TRACKER DEBUG: No exclusion pattern matched for model: {model}")
+        return False
+
     def is_image_generation_request(self, body: dict, __request__ = None) -> bool:
         """Detect if this is an image generation request using official Open WebUI detection"""
         
@@ -828,6 +859,16 @@ class Filter:
         
         # Store the full input for cost calculation (simple global storage)
         model = body.get("model", "unknown")
+
+        # Check if we should completely exclude cost tracking for this model
+        if self.should_exclude_cost_tracking(model):
+            print(f"SIMPLE_COST_TRACKER DEBUG: Completely excluding cost tracking for model: {model}")
+            # Set flag to skip outlet processing as well
+            self._skip_cost_tracking = True
+            return body
+
+        # Reset skip flag for regular requests
+        self._skip_cost_tracking = False
 
         # Check if we should ignore memory calculation for this model
         print(f"SIMPLE_COST_TRACKER DEBUG: Checking model '{model}' against valve patterns")
@@ -908,6 +949,11 @@ class Filter:
         # Skip processing if this was an image generation request
         if hasattr(self, '_skip_image_generation') and self._skip_image_generation:
             print(f"SIMPLE_COST_TRACKER DEBUG: Skipping outlet processing for image generation request")
+            return body
+        
+        # Skip processing if cost tracking is completely excluded for this model
+        if hasattr(self, '_skip_cost_tracking') and self._skip_cost_tracking:
+            print(f"SIMPLE_COST_TRACKER DEBUG: Skipping outlet processing for excluded model")
             return body
         
         try:
