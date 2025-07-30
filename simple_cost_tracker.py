@@ -3,7 +3,7 @@ title: Simple Cost Tracker
 author: Roni Laukkarinen
 description: A minimalist cost tracking function that tracks token usage and costs per model.
 repository_url: https://github.com/ronilaukkarinen/open-webui-simple-cost-tracker
-version: 1.1.0
+version: 1.1.1
 required_open_webui_version: >= 0.5.0
 """
 
@@ -483,14 +483,16 @@ class Filter:
 
         # Valve to ignore memory prompt calculation for specific custom models
         ignore_memory_for_custom_models: str = Field(
-            default="english-refiner,task-manager,custom-,character-",
-            description="Comma-separated list of custom model names/patterns to ignore memory prompt calculation for (e.g., 'english-refiner,task-manager,custom-') - prevents inflated costs"
+            default="english-refiner,task-manager,custom,character",
+            description="Comma-separated list of custom model names/patterns to ignore memory prompt calculation for (e.g., 'english-refiner,task-manager,custom') - prevents inflated costs",
+            pattern=r"^[a-zA-Z0-9\-_,\s]*$"
         )
 
         # Valve to completely exclude cost tracking for specific custom models
         exclude_cost_tracking_for_models: str = Field(
             default="",
-            description="Comma-separated list of model names/patterns to completely exclude from cost tracking (e.g., 'my-custom-model,another-model'). No cost tracking will be performed for these models."
+            description="Comma-separated list of model names/patterns to completely exclude from cost tracking (e.g., 'my-custom-model,another-model'). No cost tracking will be performed for these models.",
+            pattern=r"^[a-zA-Z0-9\-_,\s]*$"
         )
 
         # Model costs JSON - easily add/remove models and update prices

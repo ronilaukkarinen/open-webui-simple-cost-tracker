@@ -1,3 +1,7 @@
+### 1.1.1: 2025-07-30
+
+* Fix: "SyntaxError: The string did not match the expected pattern" error in Open WebUI
+
 ### 1.1.0: 2025-07-24
 
 * Add valve to completely exclude chosen custom models
